@@ -123,6 +123,30 @@ export interface SessionTranscript {
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 
+/** Dashboard-wide preferences (the settings page). Per-project settings live on Project. */
+export interface Settings {
+  /** Model new chats start with; "" means Claude Code's own default. */
+  defaultModel: string;
+  /** Permission mode new chats start in. */
+  defaultPermissionMode: PermissionMode;
+  /** Model for task sessions; "" means the same as defaultModel. */
+  taskModel: string;
+  /** Added to every task session's prompt, e.g. "Run the tests before finishing". */
+  taskInstructions: string;
+  /** What a newly added project gets for autoRun and autoPermissionMode. */
+  newProjectAutoRun: boolean;
+  newProjectPermissionMode: PermissionMode;
+  /** Path to the claude executable; "" means find it on PATH. */
+  claudePath: string;
+}
+
+export interface ClaudeInfo {
+  /** The executable the dashboard will run. */
+  command: string;
+  version?: string;
+  error?: string;
+}
+
 export interface ChatRequest {
   prompt: string;
   sessionId?: string;

@@ -7,6 +7,7 @@ import { api, type RunInfo, type Task, type TaskKind, type TaskPriority, type Ta
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
 import { activeRunForTask, useRuns } from "../lib/runs.ts";
+import { useTaskWatch } from "../lib/taskWatch.ts";
 import { AgentStrip } from "./AgentStrip.tsx";
 import { KIND_STYLE, timeAgo } from "../lib/util.ts";
 import { Empty, ErrorNote, IconButton, Kbd } from "./ui.tsx";
@@ -39,7 +40,8 @@ function parseQuickAdd(raw: string): { title: string; kind?: TaskKind; priority?
 export function TaskBoard({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const key = ["tasks", projectId];
-  const tasks = useQuery({ queryKey: key, queryFn: () => api.tasks(projectId), refetchInterval: 15_000 });
+  const tasks = useQuery({ queryKey: key, queryFn: () => api.tasks(projectId) });
+  useTaskWatch(projectId);
   const project = useQuery({ queryKey: ["project", projectId], queryFn: () => api.project(projectId) });
   const runs = useRuns();
   const autoRun = project.data?.autoRun ?? true;
@@ -69,7 +71,7 @@ export function TaskBoard({ projectId }: { projectId: number }) {
     },
   });
   const startRun = useMutation({
-    mutationFn: (id: string) => api.runTask(projectId, id),
+    mutationFn: ({ id, resume }: { id: string; resume?: boolean }) => api.runTask(projectId, id, resume),
     onSettled: () => {
       invalidate();
       qc.invalidateQueries({ queryKey: ["runs"] });
@@ -192,7 +194,8 @@ export function TaskBoard({ projectId }: { projectId: number }) {
                       onDelete={() => remove.mutate(t.id)}
                       run={activeRunForTask(runs, t.id)}
                       autoRun={autoRun}
-                      onStart={() => startRun.mutate(t.id)}
+                      onStart={() => startRun.mutate({ id: t.id })}
+                      onResume={() => startRun.mutate({ id: t.id, resume: true })}
                       onOpenRun={openRun}
                       onOpenSession={() => openSession(t)}
                     />
@@ -226,6 +229,7 @@ function TaskCard({
   run,
   autoRun,
   onStart,
+  onResume,
   onOpenRun,
   onOpenSession,
 }: {
@@ -241,6 +245,7 @@ function TaskCard({
   run?: RunInfo;
   autoRun: boolean;
   onStart: () => void;
+  onResume: () => void;
   onOpenRun: (run: RunInfo) => void;
   onOpenSession: () => void;
 }) {
@@ -344,6 +349,7 @@ function TaskCard({
           run={run}
           autoRun={autoRun}
           onStart={onStart}
+          onResume={onResume}
           onOpenRun={onOpenRun}
           onOpenSession={onOpenSession}
         />

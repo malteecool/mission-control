@@ -5,19 +5,25 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
-import type { ChatEvent, PermissionMode, PermissionReply } from "../types.ts";
+import type { ChatEvent, ClaudeInfo, PermissionMode, PermissionReply } from "../types.ts";
 import { toolResultText, toolSummary } from "./claudeSessions.ts";
+import { getSettings } from "./settings.ts";
 
-export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "bypassPermissions"];
+export { PERMISSION_MODES } from "./settings.ts";
 
 let resolved: { command: string; shell: boolean } | undefined;
+let resolvedFor: string | undefined;
 
 /**
  * On Windows `claude` is usually a .cmd shim, which Node can only spawn through a shell.
  * Prefer the real claude.exe the shim points at; fall back to the shim via the shell.
  */
 function claudeCommand(): { command: string; shell: boolean } {
-  if (resolved) return resolved;
+  // The path set on the settings page wins, then CLAUDE_BIN, then whatever is on PATH.
+  const configured = getSettings().claudePath;
+  if (resolved && resolvedFor === configured) return resolved;
+  resolvedFor = configured;
+  if (configured) return (resolved = { command: configured, shell: /\.(cmd|bat)$/i.test(configured) });
   if (process.env.CLAUDE_BIN) return (resolved = { command: process.env.CLAUDE_BIN, shell: false });
   if (process.platform !== "win32") return (resolved = { command: "claude", shell: false });
 
@@ -36,6 +42,22 @@ function claudeCommand(): { command: string; shell: boolean } {
     if (fs.existsSync(exe)) return (resolved = { command: exe, shell: false });
   }
   return (resolved = { command: "claude", shell: true });
+}
+
+/** Which claude the dashboard will run, and its version, so the settings page can show whether it works. */
+export function claudeInfo(): ClaudeInfo {
+  const { command, shell } = claudeCommand();
+  try {
+    const out = execFileSync(shell ? `"${command}"` : command, ["--version"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 15_000,
+      shell,
+    });
+    return { command, version: out.trim().split(/\r?\n/)[0] };
+  } catch (err) {
+    return { command, error: (err as Error).message.split(/\r?\n/)[0] };
+  }
 }
 
 interface PendingPermission {

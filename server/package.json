@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --disable-warning=ExperimentalWarning --import tsx src/index.ts",
+    "dev": "node scripts/dev.mjs",
     "start": "node --disable-warning=ExperimentalWarning --import tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },

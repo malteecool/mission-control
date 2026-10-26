@@ -39,15 +39,16 @@ export interface ChatState {
   permissionMode: PermissionMode;
 }
 
+// New chats start with these; the settings page changes them.
+let defaults: { model: string; permissionMode: PermissionMode } = { model: "", permissionMode: "default" };
+
 const initial = (): ChatState => ({
   items: [],
   draft: "",
   running: false,
   permissions: [],
   composer: "",
-  model: "",
-  // Claude asks before edits and commands; you approve them in the chat.
-  permissionMode: "default",
+  ...defaults,
 });
 
 const states = new Map<number, ChatState>();
@@ -75,6 +76,16 @@ const subscribe = (l: () => void) => {
   listeners.add(l);
   return () => listeners.delete(l);
 };
+
+/** Apply new defaults, also to chats you haven't started yet (so a changed setting shows straight away). */
+export function setChatDefaults(next: { model: string; permissionMode: PermissionMode }) {
+  const prev = defaults;
+  defaults = next;
+  for (const [id, s] of states) {
+    const untouched = !s.items.length && !s.sessionId && !s.running;
+    if (untouched && s.model === prev.model && s.permissionMode === prev.permissionMode) set(id, next);
+  }
+}
 
 export function useChat(projectId: number): ChatState {
   return useSyncExternalStore(subscribe, () => get(projectId));

@@ -11,6 +11,8 @@ export function useRuns(): RunInfo[] {
     queryFn: api.runs,
     // Poll quickly while something is running so approvals and finished tasks show up promptly.
     refetchInterval: (query) => (query.state.data?.some(isActive) ? 1500 : 5000),
+    // Keep polling in a background tab so desktop notifications still fire.
+    refetchIntervalInBackground: true,
   });
   return q.data ?? [];
 }

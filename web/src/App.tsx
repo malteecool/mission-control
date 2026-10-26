@@ -9,12 +9,17 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { AddProjectDialog } from "./components/AddProjectDialog.tsx";
 import { Overview } from "./components/Overview.tsx";
 import { ProjectView } from "./components/ProjectView.tsx";
+import { SettingsPage } from "./components/SettingsPage.tsx";
+import { useSettings } from "./lib/settings.ts";
+import { useNotifications } from "./lib/notify.ts";
 import { Kbd } from "./components/ui.tsx";
 
 export function App() {
   const route = useRoute();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects, refetchInterval: 30_000 });
   useRefreshOnRunFinished();
+  useSettings();
+  useNotifications(projects.data ?? []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -39,7 +44,11 @@ export function App() {
         <main className="flex min-h-0 min-w-0 flex-col">
           <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-white/[0.06] px-6">
             <div className="hud-label truncate">
-              {route.name === "overview" ? "// overview" : `// projects / ${current?.name ?? "…"} / ${route.tab}`}
+              {route.name === "overview"
+                ? "// overview"
+                : route.name === "settings"
+                  ? "// settings"
+                  : `// projects / ${current?.name ?? "…"} / ${route.tab}`}
             </div>
             <button
               onClick={() => setPaletteOpen(true)}
@@ -53,6 +62,8 @@ export function App() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             {route.name === "overview" ? (
               <Overview projects={projects.data ?? []} onAdd={() => setAddOpen(true)} />
+            ) : route.name === "settings" ? (
+              <SettingsPage />
             ) : (
               <ProjectView key={route.id} route={route} />
             )}

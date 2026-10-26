@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { FolderX, LayoutGrid, Pin, Plus } from "lucide-react";
+import { FolderX, LayoutGrid, Pin, Plus, Settings2 } from "lucide-react";
 import type { ProjectSummary } from "../lib/api.ts";
 import { href, useRoute } from "../lib/router.ts";
 import { activeRuns, useRuns } from "../lib/runs.ts";
@@ -43,6 +43,15 @@ export function Sidebar({
           )}
         >
           <LayoutGrid size={15} /> Overview
+        </a>
+        <a
+          href={href({ name: "settings" })}
+          className={clsx(
+            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition",
+            route.name === "settings" ? "bg-white/[0.07] text-white" : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200",
+          )}
+        >
+          <Settings2 size={15} /> Settings
         </a>
       </nav>
 

@@ -7,6 +7,8 @@ import type {
   ProjectSummary,
   SessionSummary,
   SessionTranscript,
+  Settings,
+  ClaudeInfo,
   Task,
 } from "../../../server/src/types.ts";
 
@@ -53,8 +55,13 @@ export const api = {
 
   overview: () => request<Overview>("GET", "/api/overview"),
 
+  settings: () => request<Settings>("GET", "/api/settings"),
+  updateSettings: (body: Partial<Settings>) => request<Settings>("PATCH", "/api/settings", body),
+  claudeInfo: () => request<ClaudeInfo>("GET", "/api/settings/claude"),
+
   chat: (id: number, body: ChatRequest) => request<RunInfo>("POST", `/api/projects/${id}/chat`, body),
-  runTask: (id: number, taskId: string) => request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`),
+  runTask: (id: number, taskId: string, resume = false) =>
+    request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`, resume ? { resume } : {}),
   runs: () => request<RunInfo[]>("GET", "/api/runs"),
   stopRun: (runId: string) => request<{ stopped: boolean }>("POST", `/api/runs/${runId}/stop`),
   answerPermission: (runId: string, reply: PermissionReply) =>

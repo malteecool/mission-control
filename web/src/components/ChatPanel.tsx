@@ -5,23 +5,11 @@ import { chat, useChat } from "../lib/chatStore.ts";
 import { Button, Empty, ErrorNote, Kbd } from "./ui.tsx";
 import clsx from "clsx";
 import { activeRuns, useRuns } from "../lib/runs.ts";
+import { MODELS, MODES } from "../lib/claudeOptions.ts";
 import { Transcript } from "./Transcript.tsx";
 import { PermissionCard } from "./PermissionCard.tsx";
 import { QuestionCard, askQuestions } from "./QuestionCard.tsx";
 
-const MODELS = [
-  { value: "", label: "Default model" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
-
-const MODES: Array<{ value: PermissionMode; label: string; hint: string }> = [
-  { value: "default", label: "Ask first", hint: "Claude asks you before it edits files or runs commands" },
-  { value: "acceptEdits", label: "Accept edits", hint: "Claude edits files without asking, and asks before shell commands" },
-  { value: "plan", label: "Plan only", hint: "Claude explores and proposes a plan without changing anything" },
-  { value: "bypassPermissions", label: "Full access", hint: "Claude may run any tool, including shell commands. Use with care." },
-];
 
 const SUGGESTIONS = [
   "Where did I leave off? Summarise recent changes and what looks unfinished.",
@@ -83,7 +71,8 @@ export function ChatPanel({ projectId }: { projectId: number }) {
           className="h-8 rounded-lg border border-white/10 bg-black/30 px-2 text-xs text-slate-300 focus:outline-none"
           title="Model"
         >
-          {MODELS.map((m) => (
+          {/* A custom model id from the settings page isn't in the list; show it anyway. */}
+          {[...MODELS, ...(MODELS.some((m) => m.value === s.model) ? [] : [{ value: s.model, label: s.model }])].map((m) => (
             <option key={m.value} value={m.value} className="bg-slate-900">
               {m.label}
             </option>

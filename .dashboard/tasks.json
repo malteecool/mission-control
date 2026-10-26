@@ -14,12 +14,14 @@
     {
       "id": "a14d4046-a4ae-47d6-9da3-bbb2b63bda87",
       "title": "Answer tool permission prompts from the UI",
-      "status": "doing",
+      "status": "done",
       "kind": "feature",
       "priority": 1,
       "createdAt": "2026-10-26T18:46:02.307Z",
-      "updatedAt": "2026-10-26T20:06:53.894Z",
-      "sessionId": "93bfc450-8b1b-4383-b216-fc9fec1e72cb"
+      "updatedAt": "2026-10-26T21:27:52.920Z",
+      "sessionId": "201ee5b7-491a-4203-8c67-4fef90957d49",
+      "notes": "If already implemented, please move the task to DONE",
+      "doneAt": "2026-10-26T21:27:52.920Z"
     },
     {
       "id": "b55a58fc-995e-4e14-a7bd-0a196d113156",
@@ -33,20 +35,23 @@
     {
       "id": "e6940b69-519a-4da0-95b1-d282737d48c1",
       "title": "Watch tasks.json for live updates",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 2,
       "createdAt": "2026-10-26T18:46:21.413Z",
-      "updatedAt": "2026-10-26T18:46:21.413Z"
+      "updatedAt": "2026-10-26T21:37:19.803Z",
+      "sessionId": "9d512173-3634-48d6-9e23-b9ddb474a26f",
+      "doneAt": "2026-10-26T21:37:19.803Z"
     },
     {
       "id": "d379a092-254f-4a01-8418-410651faf530",
       "title": "New settings page to include user choices, like default model",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 2,
       "createdAt": "2026-10-26T20:10:15.718Z",
-      "updatedAt": "2026-10-26T20:10:15.718Z"
+      "updatedAt": "2026-10-26T21:59:17.438Z",
+      "doneAt": "2026-10-26T21:59:17.438Z"
     }
   ]
 }

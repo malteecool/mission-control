@@ -2,12 +2,15 @@
 // outcome moves the card. The dashboard owns the task's status; Claude only reports whether it finished.
 import type { ChatEvent, Project, RunInfo, Task } from "../types.ts";
 import { activeRunForTask, createRun, stopRun } from "./runs.ts";
+import { getSettings } from "./settings.ts";
 import { getTask, readTasks, updateTask } from "./tasks.ts";
 
 const MARKER_DONE = /^\s*TASK_STATUS:\s*done\b/im;
 const MARKER_BLOCKED = /^\s*TASK_STATUS:\s*blocked\b[\s:\-–—]*(.*)$/im;
 
 function taskPrompt(t: Task): string {
+  // Your standing instructions from the settings page, e.g. "Run the tests before finishing".
+  const extra = getSettings().taskInstructions.trim();
   return [
     `You're working on a task from this project's task board (.dashboard/tasks.json, id ${t.id}).`,
     "",
@@ -16,6 +19,7 @@ function taskPrompt(t: Task): string {
     "",
     "Do the work now. The dashboard tracks this task's status itself, so don't edit its entry in .dashboard/tasks.json " +
       "(adding new follow-up tasks to that file is fine).",
+    ...(extra ? ["", extra] : []),
     "",
     "End your final message with exactly one of these lines:",
     "TASK_STATUS: done",
@@ -23,16 +27,38 @@ function taskPrompt(t: Task): string {
   ].join("\n");
 }
 
-/** Starts (or queues) a session for the task. Returns the existing run if one is already active. */
-export function startTaskRun(project: Project, task: Task): RunInfo {
+// Sent when continuing the task's own session, which already holds the original instructions.
+const RESUME_PROMPT = [
+  "Your session on this task was interrupted before you finished (the dashboard stopped or restarted).",
+  "Check what you already changed, then pick up where you left off and finish the task.",
+  "",
+  "End your final message with exactly one of these lines:",
+  "TASK_STATUS: done",
+  "TASK_STATUS: blocked - <what you need from me>",
+].join("\n");
+
+/**
+ * Starts (or queues) a session for the task. Returns the existing run if one is already active.
+ * With `resume`, continues the task's last session instead of starting a fresh one.
+ */
+export function startTaskRun(project: Project, task: Task, opts: { resume?: boolean } = {}): RunInfo {
   const existing = activeRunForTask(task.id);
   if (existing) return existing;
+  const resume = opts.resume && task.sessionId;
+  const settings = getSettings();
+  const base = {
+    cwd: project.path,
+    permissionMode: project.autoPermissionMode,
+    model: settings.taskModel || settings.defaultModel || undefined,
+  };
   return createRun({
     projectId: project.id,
     taskId: task.id,
     title: task.title,
     queueKey: `project:${project.id}`,
-    launch: { cwd: project.path, prompt: taskPrompt(task), permissionMode: project.autoPermissionMode },
+    launch: resume
+      ? { ...base, prompt: RESUME_PROMPT, sessionId: task.sessionId }
+      : { ...base, prompt: taskPrompt(task) },
     hooks: {
       onStart: () => void updateTask(project.path, task.id, { agentStatus: undefined, agentNote: undefined }).catch(log),
       onSession: (sessionId) => void updateTask(project.path, task.id, { sessionId }).catch(log),

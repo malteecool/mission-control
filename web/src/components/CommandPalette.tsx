@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import clsx from "clsx";
-import { CheckSquare, FolderPlus, History, LayoutGrid, MessageSquare, Plus, Search } from "lucide-react";
+import { CheckSquare, FolderPlus, History, LayoutGrid, MessageSquare, Plus, Search, Settings2 } from "lucide-react";
 import type { ProjectSummary } from "../lib/api.ts";
 import { navigate, type Route } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
@@ -73,6 +73,7 @@ export function CommandPalette({
     all.push(
       { id: "overview", group: "General", label: "Overview", icon: <LayoutGrid size={14} />, run: () => navigate({ name: "overview" }) },
       { id: "add", group: "General", label: "Add project…", icon: <FolderPlus size={14} />, run: onAddProject },
+      { id: "settings", group: "General", label: "Settings", icon: <Settings2 size={14} />, run: () => navigate({ name: "settings" }) },
     );
     if (!query) return all;
     return all

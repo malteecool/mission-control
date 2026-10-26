@@ -15,9 +15,11 @@ import {
 import { getGitInfo } from "./lib/git.ts";
 import { createTask, deleteTask, getTask, readTasks, updateTask, validateTaskInput } from "./lib/tasks.ts";
 import { discoverProjects, lastSessionAt, listSessions, locateSession, readTranscript } from "./lib/claudeSessions.ts";
-import { PERMISSION_MODES, answerPermission } from "./lib/claudeRunner.ts";
+import { PERMISSION_MODES, answerPermission, claudeInfo } from "./lib/claudeRunner.ts";
+import { getSettings, MODEL_RE, updateSettings, validateSettings } from "./lib/settings.ts";
 import { createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
 import { applyOutcome, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
+import { watchTasksStream } from "./lib/taskWatcher.ts";
 import type { ChatRequest, Overview, PermissionReply, Project, ProjectSummary, Task, TaskStatus } from "./types.ts";
 
 // Not plain PORT: dev tools often set that for the web app, which would make both servers fight over one port.
@@ -88,6 +90,8 @@ app.post("/api/projects", async (c) => {
     name: body.name?.trim() || path.basename(abs),
     description: body.description?.trim(),
     color: body.color,
+    autoRun: getSettings().newProjectAutoRun,
+    autoPermissionMode: getSettings().newProjectPermissionMode,
   });
   return c.json(await summarise(p), 201);
 });
@@ -124,9 +128,30 @@ app.delete("/api/projects/:id", (c) => {
   return c.body(null, 204);
 });
 
+// ── Settings ────────────────────────────────────────────────────────────────
+
+app.get("/api/settings", (c) => c.json(getSettings()));
+
+app.patch("/api/settings", async (c) => {
+  const patch = validateSettings(await c.req.json().catch(() => null));
+  if (typeof patch === "string") throw new HttpError(400, patch);
+  return c.json(updateSettings(patch));
+});
+
+// Runs `claude --version`, so it's a separate call the settings page makes when it opens.
+app.get("/api/settings/claude", (c) => c.json(claudeInfo()));
+
 // ── Tasks ───────────────────────────────────────────────────────────────────
 
 app.get("/api/projects/:id/tasks", async (c) => c.json(await readTasks(projectOr404(c.req.param("id")).path)));
+
+// Live change pings for open task boards.
+app.get("/api/projects/:id/tasks/watch", (c) => {
+  const stream = watchTasksStream(projectOr404(c.req.param("id")).path);
+  return new Response(stream, {
+    headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" },
+  });
+});
 
 app.post("/api/projects/:id/tasks", async (c) => {
   const p = projectOr404(c.req.param("id"));
@@ -156,13 +181,16 @@ app.patch("/api/projects/:id/tasks/:taskId", async (c) => {
 });
 
 // Start (or retry) a Claude session for a task by hand; moves it to "In progress" if needed.
+// `{ "resume": true }` continues the task's last session, e.g. one cut off by a restart.
 app.post("/api/projects/:id/tasks/:taskId/run", async (c) => {
   const p = projectOr404(c.req.param("id"));
   if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  const body = (await c.req.json().catch(() => ({}))) as { resume?: unknown };
   let task = await getTask(p.path, c.req.param("taskId"));
   if (!task) throw new HttpError(404, "Task not found");
+  if (body.resume === true && !task.sessionId) throw new HttpError(400, "This task has no Claude session to resume");
   if (task.status !== "doing") task = (await updateTask(p.path, task.id, { status: "doing" }))!;
-  return c.json(startTaskRun(p, task), 201);
+  return c.json(startTaskRun(p, task, { resume: body.resume === true }), 201);
 });
 
 app.delete("/api/projects/:id/tasks/:taskId", async (c) => {
@@ -188,7 +216,7 @@ app.post("/api/projects/:id/chat", async (c) => {
   if (typeof body.prompt !== "string" || !body.prompt.trim()) throw new HttpError(400, "prompt is required");
   const permissionMode = body.permissionMode ?? "default";
   if (!PERMISSION_MODES.includes(permissionMode)) throw new HttpError(400, "Unknown permission mode");
-  if (body.model !== undefined && !/^[a-zA-Z0-9.\-_[\]]{1,64}$/.test(body.model))
+  if (body.model !== undefined && body.model !== "" && !MODEL_RE.test(body.model))
     throw new HttpError(400, "Invalid model name");
 
   let cwd = p.path;

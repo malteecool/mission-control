@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
-import { AlertTriangle, Clock, Eye, MessageSquareReply, Play, RotateCcw, ShieldQuestion, Sparkles } from "lucide-react";
+import { AlertTriangle, Clock, Eye, MessageSquareReply, Play, RotateCcw, ShieldQuestion, Sparkles, StepForward } from "lucide-react";
 import type { RunInfo, Task } from "../lib/api.ts";
 
 /** What Claude is doing about a task, shown at the bottom of its card. */
@@ -9,6 +9,7 @@ export function AgentStrip({
   run,
   autoRun,
   onStart,
+  onResume,
   onOpenRun,
   onOpenSession,
 }: {
@@ -16,6 +17,7 @@ export function AgentStrip({
   run?: RunInfo;
   autoRun: boolean;
   onStart: () => void;
+  onResume: () => void;
   onOpenRun: (run: RunInfo) => void;
   onOpenSession: () => void;
 }) {
@@ -49,17 +51,33 @@ export function AgentStrip({
     );
   }
 
-  if (t.status === "doing" && t.agentStatus)
+  if (t.status === "doing" && t.agentStatus === "blocked")
+    return (
+      <Strip tone="amber" icon={<AlertTriangle size={11} />} text="Claude needs you" note={t.agentNote}>
+        {t.sessionId && (
+          <StripButton strong onClick={onOpenSession}>
+            <MessageSquareReply size={11} /> Reply
+          </StripButton>
+        )}
+        <StripButton onClick={onStart}>
+          <RotateCcw size={11} /> New run
+        </StripButton>
+      </Strip>
+    );
+
+  // Failed or stopped, or the session was cut off without an outcome (the server restarted mid-run):
+  // continuing the same session keeps what Claude already knows and did.
+  if (t.status === "doing" && (t.agentStatus === "failed" || t.sessionId))
     return (
       <Strip
-        tone={t.agentStatus === "blocked" ? "amber" : "rose"}
+        tone="rose"
         icon={<AlertTriangle size={11} />}
-        text={t.agentStatus === "blocked" ? "Claude needs you" : "Claude's run didn't finish"}
+        text={t.agentStatus === "failed" ? "Claude's run didn't finish" : "Claude's session was interrupted"}
         note={t.agentNote}
       >
         {t.sessionId && (
-          <StripButton strong={t.agentStatus === "blocked"} onClick={onOpenSession}>
-            <MessageSquareReply size={11} /> {t.agentStatus === "blocked" ? "Reply" : "Open session"}
+          <StripButton strong onClick={onResume}>
+            <StepForward size={11} /> Resume
           </StripButton>
         )}
         <StripButton onClick={onStart}>

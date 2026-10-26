@@ -14,6 +14,10 @@ Open http://127.0.0.1:5317. The API runs on http://127.0.0.1:4317 (override with
 
 For a single-process setup: `npm run build && npm start`, then open http://localhost:4317.
 
+In dev, the API restarts when server code changes, but waits until no Claude session is running first, so a session
+working on the dashboard itself doesn't cut itself off. If a session does get cut off (you closed the app, say), its
+task card offers **Resume**, which continues the same Claude session.
+
 **Requirements:** Node 22.13+ (uses the built-in `node:sqlite`), Git, and the Claude Code CLI logged in
 (`claude`, then `/login`). Set `CLAUDE_BIN` if `claude` isn't on your PATH.
 
@@ -21,7 +25,8 @@ For a single-process setup: `npm run build && npm start`, then open http://local
 
 - **Projects** are registered folders, stored in `server/data/dashboard.db`. Removing a project never touches its files.
   "Add project" also lists every folder you've already used Claude Code in.
-- **Tasks** live in each project at `.dashboard/tasks.json`, so Claude can read them and add follow-ups.
+- **Tasks** live in each project at `.dashboard/tasks.json`, so Claude can read them and add follow-ups. The board
+  updates live when the file changes, whoever edits it.
   Quick-add syntax: `Fix login #bug !1` (kinds: `#feature #bug #chore #idea`, priority `!1`–`!3`).
 - **Task automation:** moving a card to *In progress* starts a new Claude session for it on the server, and the
   dashboard moves the card itself. Claude ends with `TASK_STATUS: done` (the card goes to *Done*) or
@@ -36,6 +41,9 @@ For a single-process setup: `npm run build && npm start`, then open http://local
   running commands and waits for your approval — a card appears in the chat panel (or click **Review** on the task
   card to answer without leaving the board). "Accept edits" auto-approves file edits, asking only before shell
   commands. "Full access" auto-approves everything.
+- **Settings** (sidebar, or Ctrl+K) holds dashboard-wide defaults: the model and permission mode new chats start
+  with, the model and standing instructions for task sessions, the automation settings new projects get, desktop
+  notifications (per browser), and which `claude` executable to run.
 - **History** reads Claude Code's own session files (`~/.claude/projects/…`), so it includes chats from the terminal
   and desktop app too. Any session can be resumed from the dashboard.
 

@@ -79,12 +79,29 @@ export function findProjectByPath(p: string): Project | undefined {
   return row ? toProject(row) : undefined;
 }
 
-export function createProject(input: { name: string; path: string; color?: string; description?: string }): Project {
+export function createProject(input: {
+  name: string;
+  path: string;
+  color?: string;
+  description?: string;
+  autoRun?: boolean;
+  autoPermissionMode?: PermissionMode;
+}): Project {
   const count = (db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
   const color = input.color ?? COLORS[count % COLORS.length];
   const result = db
-    .prepare("INSERT INTO projects (name, path, color, description, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(input.name, input.path, color, input.description ?? "", new Date().toISOString());
+    .prepare(
+      "INSERT INTO projects (name, path, color, description, created_at, auto_run, auto_permission_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      input.name,
+      input.path,
+      color,
+      input.description ?? "",
+      new Date().toISOString(),
+      input.autoRun === false ? 0 : 1,
+      input.autoPermissionMode ?? "acceptEdits",
+    );
   return getProject(Number(result.lastInsertRowid))!;
 }
 
