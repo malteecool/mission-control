@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "8ab4a94a-aa3b-4952-aa90-b546992df349",
+      "title": "Verify chat streaming",
+      "status": "done",
+      "kind": "chore",
+      "priority": 1,
+      "createdAt": "2026-10-26T18:40:33.228Z",
+      "updatedAt": "2026-10-26T18:40:33.602Z",
+      "doneAt": "2026-10-26T18:40:33.602Z"
+    },
+    {
+      "id": "a14d4046-a4ae-47d6-9da3-bbb2b63bda87",
+      "title": "Answer tool permission prompts from the UI",
+      "status": "doing",
+      "kind": "feature",
+      "priority": 1,
+      "createdAt": "2026-10-26T18:46:02.307Z",
+      "updatedAt": "2026-10-26T19:04:55.766Z"
+    },
+    {
+      "id": "b55a58fc-995e-4e14-a7bd-0a196d113156",
+      "title": "Wrap the app in Tauri with a tray icon",
+      "status": "todo",
+      "kind": "idea",
+      "priority": 3,
+      "createdAt": "2026-10-26T18:46:21.379Z",
+      "updatedAt": "2026-10-26T18:46:21.379Z"
+    },
+    {
+      "id": "e6940b69-519a-4da0-95b1-d282737d48c1",
+      "title": "Watch tasks.json for live updates",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-26T18:46:21.413Z",
+      "updatedAt": "2026-10-26T18:46:21.413Z"
+    }
+  ]
+}
