@@ -2,10 +2,12 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight, ListTodo, MessageSquare, Plus, Trash2 } from "lucide-react";
-import { api, type Task, type TaskKind, type TaskPriority, type TaskStatus } from "../lib/api.ts";
+import { ChevronLeft, ChevronRight, ListTodo, Play, Plus, Trash2 } from "lucide-react";
+import { api, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
+import { activeRunForTask, useRuns } from "../lib/runs.ts";
+import { AgentStrip } from "./AgentStrip.tsx";
 import { KIND_STYLE, timeAgo } from "../lib/util.ts";
 import { Empty, ErrorNote, IconButton, Kbd } from "./ui.tsx";
 
@@ -38,6 +40,9 @@ export function TaskBoard({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const key = ["tasks", projectId];
   const tasks = useQuery({ queryKey: key, queryFn: () => api.tasks(projectId), refetchInterval: 15_000 });
+  const project = useQuery({ queryKey: ["project", projectId], queryFn: () => api.project(projectId) });
+  const runs = useRuns();
+  const autoRun = project.data?.autoRun ?? true;
   const [draft, setDraft] = useState("");
   const [filter, setFilter] = useState<TaskKind | "all">("all");
   const [dragOver, setDragOver] = useState<TaskStatus | null>(null);
@@ -57,11 +62,18 @@ export function TaskBoard({ projectId }: { projectId: number }) {
       await qc.cancelQueries({ queryKey: key });
       qc.setQueryData<Task[]>(key, (old) => old?.map((t) => (t.id === id ? { ...t, ...patch } : t)));
     },
-    onSuccess: (task, variables) => {
-      if (task && variables.status === "doing") workOn(task);
+    // Moving a card into "In progress" may have started a Claude run on the server.
+    onSettled: () => {
       invalidate();
+      qc.invalidateQueries({ queryKey: ["runs"] });
     },
-    onError: invalidate,
+  });
+  const startRun = useMutation({
+    mutationFn: (id: string) => api.runTask(projectId, id),
+    onSettled: () => {
+      invalidate();
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
   });
   const remove = useMutation({ mutationFn: (id: string) => api.deleteTask(projectId, id), onSuccess: invalidate });
 
@@ -74,12 +86,13 @@ export function TaskBoard({ projectId }: { projectId: number }) {
     return out;
   }, [tasks.data, filter]);
 
-  const workOn = (t: Task) => {
-    chat.setComposer(
-      projectId,
-      `Let's work on this task from .dashboard/tasks.json (id: ${t.id}):\n\n"${t.title}"${t.notes ? `\n\nNotes: ${t.notes}` : ""}\n\n` +
-        `Set its status to "doing" when you start and "done" when it's finished, and add any follow-up tasks to the same file.`,
-    );
+  const openRun = (run: RunInfo) => {
+    chat.attach(projectId, run);
+    navigate({ name: "project", id: projectId, tab: "chat" });
+  };
+  const openSession = (t: Task) => {
+    if (!t.sessionId) return;
+    chat.openSession(projectId, t.sessionId, t.id).catch(() => {});
     navigate({ name: "project", id: projectId, tab: "chat" });
   };
 
@@ -127,8 +140,8 @@ export function TaskBoard({ projectId }: { projectId: number }) {
         </div>
       </div>
 
-      {(add.error || update.error || remove.error || tasks.error) && (
-        <ErrorNote>{(add.error ?? update.error ?? remove.error ?? tasks.error)!.message}</ErrorNote>
+      {(add.error || update.error || remove.error || startRun.error || tasks.error) && (
+        <ErrorNote>{(add.error ?? update.error ?? remove.error ?? startRun.error ?? tasks.error)!.message}</ErrorNote>
       )}
 
       {tasks.data?.length === 0 ? (
@@ -177,7 +190,11 @@ export function TaskBoard({ projectId }: { projectId: number }) {
                       onPriority={(priority) => update.mutate({ id: t.id, priority })}
                       onNotes={(notes) => update.mutate({ id: t.id, notes })}
                       onDelete={() => remove.mutate(t.id)}
-                      onWorkOn={() => workOn(t)}
+                      run={activeRunForTask(runs, t.id)}
+                      autoRun={autoRun}
+                      onStart={() => startRun.mutate(t.id)}
+                      onOpenRun={openRun}
+                      onOpenSession={() => openSession(t)}
                     />
                   ))}
                 </AnimatePresence>
@@ -206,7 +223,11 @@ function TaskCard({
   onPriority,
   onNotes,
   onDelete,
-  onWorkOn,
+  run,
+  autoRun,
+  onStart,
+  onOpenRun,
+  onOpenSession,
 }: {
   task: Task;
   onMove: (dir: -1 | 1) => void;
@@ -217,7 +238,11 @@ function TaskCard({
   onPriority: (p: TaskPriority) => void;
   onNotes: (notes: string) => void;
   onDelete: () => void;
-  onWorkOn: () => void;
+  run?: RunInfo;
+  autoRun: boolean;
+  onStart: () => void;
+  onOpenRun: (run: RunInfo) => void;
+  onOpenSession: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -287,9 +312,9 @@ function TaskCard({
           <span className="font-mono text-[10px] text-slate-600">{timeAgo(done ? t.doneAt : t.updatedAt)}</span>
 
           <div className="ml-auto flex items-center opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-            {!done && (
-              <IconButton onClick={onWorkOn} title="Work on this with Claude">
-                <MessageSquare size={13} />
+            {!done && !run && (
+              <IconButton onClick={onStart} title="Start a Claude session for this task (moves it to In progress)">
+                <Play size={13} />
               </IconButton>
             )}
             <IconButton onClick={() => onMove(-1)} disabled={!canLeft} title="Move left" className="disabled:opacity-20">
@@ -314,6 +339,14 @@ function TaskCard({
           />
         )}
         {!expanded && t.notes && <div className="mt-1.5 line-clamp-2 pl-1.5 text-xs text-slate-500">{t.notes}</div>}
+        <AgentStrip
+          task={t}
+          run={run}
+          autoRun={autoRun}
+          onStart={onStart}
+          onOpenRun={onOpenRun}
+          onOpenSession={onOpenSession}
+        />
       </div>
     </motion.div>
   );

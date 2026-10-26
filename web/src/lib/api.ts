@@ -1,5 +1,7 @@
 import type {
+  ChatRequest,
   DiscoveredProject,
+  RunInfo,
   Overview,
   PermissionReply,
   ProjectSummary,
@@ -31,7 +33,12 @@ export const api = {
   discover: () => request<DiscoveredProject[]>("GET", "/api/projects/discover"),
   addProject: (body: { path: string; name?: string; description?: string }) =>
     request<ProjectSummary>("POST", "/api/projects", body),
-  updateProject: (id: number, body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned">> & { touch?: boolean }) =>
+  updateProject: (
+    id: number,
+    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode">> & {
+      touch?: boolean;
+    },
+  ) =>
     request<ProjectSummary>("PATCH", `/api/projects/${id}`, body),
   removeProject: (id: number) => request<void>("DELETE", `/api/projects/${id}`),
 
@@ -45,7 +52,11 @@ export const api = {
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),
 
   overview: () => request<Overview>("GET", "/api/overview"),
-  stopRun: (runId: string) => request<{ stopped: boolean }>("POST", `/api/chat/${runId}/stop`),
+
+  chat: (id: number, body: ChatRequest) => request<RunInfo>("POST", `/api/projects/${id}/chat`, body),
+  runTask: (id: number, taskId: string) => request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`),
+  runs: () => request<RunInfo[]>("GET", "/api/runs"),
+  stopRun: (runId: string) => request<{ stopped: boolean }>("POST", `/api/runs/${runId}/stop`),
   answerPermission: (runId: string, reply: PermissionReply) =>
-    request<{ ok: true }>("POST", `/api/chat/${runId}/permission`, reply),
+    request<{ ok: true }>("POST", `/api/runs/${runId}/permission`, reply),
 };

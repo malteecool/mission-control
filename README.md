@@ -21,12 +21,21 @@ For a single-process setup: `npm run build && npm start`, then open http://local
 
 - **Projects** are registered folders, stored in `server/data/dashboard.db`. Removing a project never touches its files.
   "Add project" also lists every folder you've already used Claude Code in.
-- **Tasks** live in each project at `.dashboard/tasks.json`, so you can ask Claude to read, add or complete them in a chat.
-  The "work on this" button on a task card hands it to Claude with exactly those instructions.
+- **Tasks** live in each project at `.dashboard/tasks.json`, so Claude can read them and add follow-ups.
   Quick-add syntax: `Fix login #bug !1` (kinds: `#feature #bug #chore #idea`, priority `!1`–`!3`).
+- **Task automation:** moving a card to *In progress* starts a new Claude session for it on the server, and the
+  dashboard moves the card itself. Claude ends with `TASK_STATUS: done` (the card goes to *Done*) or
+  `TASK_STATUS: blocked - …` (it stays in progress with Claude's question; reply in that session and the card moves
+  once Claude confirms). Failed or stopped runs stay in progress with the error. Moving the card out of *In progress*
+  stops its run. One task runs at a time per project; the rest queue. Auto-start and the permission mode for task
+  sessions are per-project settings.
+- **Runs live on the server,** so chats and task sessions keep going when you navigate away or reload. Cards and
+  the chat show what's running; open one to watch it or answer approvals.
 - **Chat** runs `claude -p --output-format stream-json` in the project folder, using your normal Claude login.
-  Pick a model and permission mode per chat. In the default "Ask" mode, tools that need approval are denied
-  because nobody can approve them; "Accept edits" lets Claude change files; "Full access" also allows shell commands.
+  Pick a model and permission mode per chat. In the default "Ask" mode, Claude pauses before editing files or
+  running commands and waits for your approval — a card appears in the chat panel (or click **Review** on the task
+  card to answer without leaving the board). "Accept edits" auto-approves file edits, asking only before shell
+  commands. "Full access" auto-approves everything.
 - **History** reads Claude Code's own session files (`~/.claude/projects/…`), so it includes chats from the terminal
   and desktop app too. Any session can be resumed from the dashboard.
 

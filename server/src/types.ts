@@ -16,6 +16,13 @@ export interface Task {
   doneAt?: string;
   /** Claude session the task was worked on in. */
   sessionId?: string;
+  /**
+   * Set when Claude's last run on this task ended without finishing it: "blocked" when Claude needs
+   * something from you, "failed" when the run errored or was stopped. Cleared when a run finishes the task.
+   */
+  agentStatus?: "blocked" | "failed";
+  /** Claude's explanation (or the error) that goes with agentStatus. */
+  agentNote?: string;
 }
 
 export interface TaskFile {
@@ -40,6 +47,28 @@ export interface Project {
   pinned: boolean;
   createdAt: string;
   lastOpenedAt?: string;
+  /** Start a Claude session when a task is moved to "In progress". */
+  autoRun: boolean;
+  /** Permission mode those task sessions run in. */
+  autoPermissionMode: PermissionMode;
+}
+
+export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
+
+/** A Claude run tracked by the server: an interactive chat turn or a task session. */
+export interface RunInfo {
+  id: string;
+  projectId: number;
+  /** Set for runs working on a task. */
+  taskId?: string;
+  sessionId?: string;
+  title: string;
+  status: RunStatus;
+  startedAt: string;
+  finishedAt?: string;
+  /** Approvals and questions waiting for you. */
+  permissions: PermissionRequest[];
+  error?: string;
 }
 
 export interface ProjectSummary extends Project {
@@ -128,7 +157,7 @@ export interface AskQuestion {
   multiSelect?: boolean;
 }
 
-/** Normalised events streamed (as NDJSON) from POST /api/projects/:id/chat. */
+/** Normalised run events, streamed as NDJSON from GET /api/runs/:id/events (replayed from the start). */
 export type ChatEvent =
   | { type: "run"; runId: string }
   | { type: "permission"; request: PermissionRequest }
@@ -145,7 +174,10 @@ export type ChatEvent =
       durationMs?: number;
       numTurns?: number;
       permissionDenials: string[];
+      /** Error text when isError. */
       text?: string;
+      /** Claude's final message. */
+      result?: string;
     }
   | { type: "error"; message: string };
 

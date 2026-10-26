@@ -1,4 +1,5 @@
-// Runs one chat turn through Claude Code's headless mode and normalises its stream-json output.
+// Runs one Claude Code process in headless mode and normalises its stream-json output into ChatEvents.
+// Who listens to those events (chat UI, task automation) is the run manager's business (runs.ts).
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -42,19 +43,30 @@ interface PendingPermission {
   suggestions?: unknown[];
 }
 
-interface Run {
+interface Proc {
   child: ChildProcess;
   stopped: boolean;
   pending: Map<string, PendingPermission>;
-  send: (ev: ChatEvent) => void;
+  emit: (ev: ChatEvent) => void;
 }
-const runs = new Map<string, Run>();
+const procs = new Map<string, Proc>();
 
-export function stopRun(runId: string): boolean {
-  const run = runs.get(runId);
-  if (!run) return false;
-  run.stopped = true;
-  run.child.kill();
+// Don't leave Claude processes running (and editing files) after the dashboard server goes away.
+function killAll() {
+  for (const p of procs.values()) p.child.kill();
+}
+process.on("exit", killAll);
+for (const sig of ["SIGINT", "SIGTERM"] as const)
+  process.once(sig, () => {
+    killAll();
+    process.exit(0);
+  });
+
+export function stopProcess(runId: string): boolean {
+  const p = procs.get(runId);
+  if (!p) return false;
+  p.stopped = true;
+  p.child.kill();
   return true;
 }
 
@@ -64,10 +76,10 @@ function writeLine(child: ChildProcess, msg: unknown) {
 
 /** Sends the user's decision back to Claude Code. Returns false if the request is no longer pending. */
 export function answerPermission(runId: string, reply: PermissionReply): boolean {
-  const run = runs.get(runId);
-  const req = run?.pending.get(reply.requestId);
-  if (!run || !req) return false;
-  run.pending.delete(reply.requestId);
+  const p = procs.get(runId);
+  const req = p?.pending.get(reply.requestId);
+  if (!p || !req) return false;
+  p.pending.delete(reply.requestId);
   const response = reply.allow
     ? {
         behavior: "allow",
@@ -76,15 +88,15 @@ export function answerPermission(runId: string, reply: PermissionReply): boolean
         ...(reply.always && req.suggestions?.length ? { updatedPermissions: req.suggestions } : {}),
       }
     : { behavior: "deny", message: reply.message?.trim() || "The user denied this tool call from the dashboard." };
-  writeLine(run.child, {
+  writeLine(p.child, {
     type: "control_response",
     response: { subtype: "success", request_id: reply.requestId, response },
   });
-  run.send({ type: "permission_resolved", requestId: reply.requestId });
+  p.emit({ type: "permission_resolved", requestId: reply.requestId });
   return true;
 }
 
-export interface RunOptions {
+export interface LaunchOptions {
   cwd: string;
   prompt: string;
   sessionId?: string;
@@ -92,128 +104,115 @@ export interface RunOptions {
   permissionMode: PermissionMode;
 }
 
-/** Starts a turn and returns an NDJSON stream of ChatEvents. Cancelling the stream kills the process. */
-export function startRun(opts: RunOptions): ReadableStream<Uint8Array> {
-  const runId = randomUUID();
-  const encoder = new TextEncoder();
-  let child: ChildProcess;
+/**
+ * Starts Claude Code for one prompt. Every event goes to `emit`; the last one is always either
+ * `done` or `error`, after which `onExit` is called once.
+ */
+export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: ChatEvent) => void, onExit: () => void) {
+  // stream-json input keeps stdin open as a control channel: with `--permission-prompt-tool stdio`
+  // Claude Code sends a can_use_tool control_request for every call that needs approval and waits
+  // for our control_response.
+  const args = [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--permission-prompt-tool",
+    "stdio",
+    "--permission-mode",
+    opts.permissionMode,
+  ];
+  if (opts.sessionId) args.push("--resume", opts.sessionId);
+  if (opts.model) args.push("--model", opts.model);
 
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      let closed = false;
-      const send = (ev: ChatEvent) => {
-        if (!closed) controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"));
-      };
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        runs.delete(runId);
-        controller.close();
-      };
+  // Don't let the child think it is nested inside another Claude Code session.
+  const env = { ...process.env };
+  delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
 
-      // stream-json input keeps stdin open as a control channel: with `--permission-prompt-tool stdio`
-      // Claude Code sends a can_use_tool control_request for every call that needs approval and waits
-      // for our control_response.
-      const args = [
-        "-p",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--include-partial-messages",
-        "--permission-prompt-tool",
-        "stdio",
-        "--permission-mode",
-        opts.permissionMode,
-      ];
-      if (opts.sessionId) args.push("--resume", opts.sessionId);
-      if (opts.model) args.push("--model", opts.model);
+  const { command, shell } = claudeCommand();
+  const child = spawn(command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
+  const proc: Proc = { child, stopped: false, pending: new Map(), emit };
+  procs.set(runId, proc);
 
-      // Don't let the child think it is nested inside another Claude Code session.
-      const env = { ...process.env };
-      delete env.CLAUDECODE;
-      delete env.CLAUDE_CODE_ENTRYPOINT;
+  let finished = false;
+  const finish = (last?: ChatEvent) => {
+    if (finished) return;
+    finished = true;
+    procs.delete(runId);
+    if (last) emit(last);
+    onExit();
+  };
 
-      const { command, shell } = claudeCommand();
-      child = spawn(command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
-      const run: Run = { child, stopped: false, pending: new Map(), send };
-      runs.set(runId, run);
-      send({ type: "run", runId });
+  // The prompt goes over stdin so it never needs shell escaping.
+  writeLine(child, {
+    type: "user",
+    session_id: "",
+    parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "text", text: opts.prompt }] },
+  });
 
-      // The prompt goes over stdin so it never needs shell escaping.
-      writeLine(child, {
-        type: "user",
-        session_id: "",
-        parent_tool_use_id: null,
-        message: { role: "user", content: [{ type: "text", text: opts.prompt }] },
-      });
+  let stderr = "";
+  let doneEvent: ChatEvent | undefined;
+  child.stderr.on("data", (d) => {
+    stderr = (stderr + d.toString()).slice(-4000);
+  });
 
-      let stderr = "";
-      let sawResult = false;
-      child.stderr!.on("data", (d) => {
-        stderr = (stderr + d.toString()).slice(-4000);
-      });
+  const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+  rl.on("line", (line) => {
+    if (!line.trim()) return;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (e.type === "control_request") return handleControlRequest(proc, e);
+    if (e.type === "control_cancel_request") {
+      // Claude Code gave up on a request (e.g. the turn was interrupted); drop the prompt from the UI.
+      if (proc.pending.delete(e.request_id)) emit({ type: "permission_resolved", requestId: e.request_id });
+      return;
+    }
+    for (const ev of normalise(e)) {
+      // Hold the result back until the process exits, so listeners see it as the final event.
+      if (ev.type === "done") doneEvent = ev;
+      else emit(ev);
+    }
+    if (e.type === "result") {
+      // In stream-json input mode the CLI waits for another message after each turn;
+      // closing stdin is what lets it exit.
+      child.stdin.end();
+    }
+  });
 
-      const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
-      rl.on("line", (line) => {
-        if (!line.trim()) return;
-        let e: any;
-        try {
-          e = JSON.parse(line);
-        } catch {
-          return;
-        }
-        if (e.type === "control_request") return handleControlRequest(run, e);
-        if (e.type === "control_cancel_request") {
-          // Claude Code gave up on a request (e.g. the turn was interrupted); drop the prompt from the UI.
-          if (run.pending.delete(e.request_id)) send({ type: "permission_resolved", requestId: e.request_id });
-          return;
-        }
-        if (e.type === "result") {
-          sawResult = true;
-          // In stream-json input mode the CLI waits for another message after each turn;
-          // closing stdin is what lets it exit.
-          child.stdin?.end();
-        }
-        for (const ev of normalise(e)) send(ev);
-      });
-
-      child.on("error", (err) => {
-        send({ type: "error", message: `Could not start Claude Code (${command}): ${err.message}` });
-        close();
-      });
-      child.on("close", (code) => {
-        // Let readline flush the last lines before we close the stream.
-        setImmediate(() => {
-          if (run.stopped && !sawResult) send({ type: "error", message: "Stopped" });
-          else if (!sawResult)
-            send({ type: "error", message: `Claude Code exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}` });
-          close();
-        });
-      });
-    },
-    cancel() {
-      child?.kill();
-      runs.delete(runId);
-    },
+  child.on("error", (err) => finish({ type: "error", message: `Could not start Claude Code (${command}): ${err.message}` }));
+  child.on("close", (code) => {
+    // Let readline flush the last lines first.
+    setImmediate(() => {
+      if (doneEvent) finish(doneEvent);
+      else if (proc.stopped) finish({ type: "error", message: "Stopped" });
+      else finish({ type: "error", message: `Claude Code exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}` });
+    });
   });
 }
 
-function handleControlRequest(run: Run, e: any) {
+function handleControlRequest(proc: Proc, e: any) {
   const req = e.request ?? {};
   if (req.subtype !== "can_use_tool") {
     // Anything else (hook callbacks, MCP messages) isn't something the dashboard registers for;
     // answer with an error so the CLI doesn't wait on it forever.
-    writeLine(run.child, {
+    writeLine(proc.child, {
       type: "control_response",
       response: { subtype: "error", request_id: e.request_id, error: `Unsupported control request: ${req.subtype}` },
     });
     return;
   }
   const suggestions = Array.isArray(req.permission_suggestions) ? req.permission_suggestions : undefined;
-  run.pending.set(e.request_id, { input: req.input, suggestions });
-  run.send({
+  proc.pending.set(e.request_id, { input: req.input, suggestions });
+  proc.emit({
     type: "permission",
     request: {
       requestId: e.request_id,
@@ -284,6 +283,7 @@ function normalise(e: any): ChatEvent[] {
             (d: any) => `${d.tool_name}${d.tool_input ? `: ${toolSummary(d.tool_name, d.tool_input)}` : ""}`,
           ),
           text: e.is_error ? (e.result ?? e.subtype) : undefined,
+          result: typeof e.result === "string" ? e.result : undefined,
         },
       ];
 

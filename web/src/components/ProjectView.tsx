@@ -3,9 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { CheckSquare, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, Trash2 } from "lucide-react";
-import { api } from "../lib/api.ts";
+import { api, type PermissionMode } from "../lib/api.ts";
 import { href, navigate, type Route, type Tab } from "../lib/router.ts";
-import { useChat } from "../lib/chatStore.ts";
+import { activeRuns, useRuns } from "../lib/runs.ts";
 import { timeAgo } from "../lib/util.ts";
 import { Button, Dot, ErrorNote, IconButton, Modal, ModalHeader } from "./ui.tsx";
 import { TaskBoard } from "./TaskBoard.tsx";
@@ -17,7 +17,8 @@ const COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa"
 export function ProjectView({ route }: { route: Extract<Route, { name: "project" }> }) {
   const qc = useQueryClient();
   const project = useQuery({ queryKey: ["project", route.id], queryFn: () => api.project(route.id) });
-  const chatState = useChat(route.id);
+  const live = activeRuns(useRuns(), route.id);
+  const waiting = live.flatMap((r) => r.permissions);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const update = useMutation({
@@ -43,11 +44,11 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
       id: "chat",
       label: "Chat",
       icon: <MessageSquare size={14} />,
-      badge: chatState.permissions.length
-        ? chatState.permissions.some((p) => p.toolName === "AskUserQuestion")
+      badge: waiting.length
+        ? waiting.some((p) => p.toolName === "AskUserQuestion")
           ? "answer"
           : "approve"
-        : chatState.running
+        : live.length
           ? "live"
           : undefined,
     },
@@ -177,6 +178,37 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
                 />
               ))}
             </div>
+          </div>
+          <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3">
+            <span className="hud-label">Task automation</span>
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={p.autoRun}
+                onChange={(e) => update.mutate({ autoRun: e.target.checked })}
+                className="mt-0.5 accent-[var(--accent)]"
+              />
+              <span className="text-sm text-slate-200">
+                Start a Claude session when a task moves to In progress
+                <span className="block text-xs text-slate-500">
+                  The card moves to Done when Claude confirms it finished. One task runs at a time per project; others queue.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              Task sessions run in
+              <select
+                value={p.autoPermissionMode}
+                onChange={(e) => update.mutate({ autoPermissionMode: e.target.value as PermissionMode })}
+                className="h-8 rounded-lg border border-white/10 bg-black/30 px-2 text-xs text-slate-200 focus:outline-none"
+              >
+                <option value="default" className="bg-slate-900">Ask first</option>
+                <option value="acceptEdits" className="bg-slate-900">Accept edits</option>
+                <option value="plan" className="bg-slate-900">Plan only</option>
+                <option value="bypassPermissions" className="bg-slate-900">Full access</option>
+              </select>
+              mode
+            </label>
           </div>
           {update.error && <ErrorNote>{update.error.message}</ErrorNote>}
           <div className="flex items-center justify-between pt-2">

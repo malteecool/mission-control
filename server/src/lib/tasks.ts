@@ -55,7 +55,9 @@ async function writeTasks(projectPath: string, tasks: Task[]): Promise<void> {
   await fs.rename(tmp, file);
 }
 
-export type TaskInput = Partial<Pick<Task, "title" | "notes" | "status" | "kind" | "priority" | "sessionId">>;
+export type TaskInput = Partial<
+  Pick<Task, "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote">
+>;
 
 export function validateTaskInput(input: unknown, requireTitle: boolean): TaskInput | string {
   if (!input || typeof input !== "object") return "Body must be an object";
@@ -126,6 +128,10 @@ export function updateTask(projectPath: string, id: string, patch: TaskInput): P
     await writeTasks(projectPath, tasks);
     return next;
   });
+}
+
+export async function getTask(projectPath: string, id: string): Promise<Task | undefined> {
+  return (await readTasks(projectPath)).find((t) => t.id === id);
 }
 
 export function deleteTask(projectPath: string, id: string): Promise<boolean> {

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import type { Project } from "./types.ts";
+import type { PermissionMode, Project } from "./types.ts";
 
 const dataDir = path.resolve(import.meta.dirname, "../data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -22,6 +22,14 @@ db.exec(`
   );
 `);
 
+// Columns added after the first release; ALTER TABLE for databases created before them.
+const columns = new Set(
+  (db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>).map((c) => c.name),
+);
+if (!columns.has("auto_run")) db.exec("ALTER TABLE projects ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 1");
+if (!columns.has("auto_permission_mode"))
+  db.exec("ALTER TABLE projects ADD COLUMN auto_permission_mode TEXT NOT NULL DEFAULT 'acceptEdits'");
+
 interface ProjectRow {
   id: number;
   name: string;
@@ -31,6 +39,8 @@ interface ProjectRow {
   pinned: number;
   created_at: string;
   last_opened_at: string | null;
+  auto_run: number;
+  auto_permission_mode: PermissionMode;
 }
 
 function toProject(row: ProjectRow): Project {
@@ -43,6 +53,8 @@ function toProject(row: ProjectRow): Project {
     pinned: row.pinned === 1,
     createdAt: row.created_at,
     lastOpenedAt: row.last_opened_at ?? undefined,
+    autoRun: row.auto_run === 1,
+    autoPermissionMode: row.auto_permission_mode,
   };
 }
 
@@ -78,7 +90,9 @@ export function createProject(input: { name: string; path: string; color?: strin
 
 export function updateProject(
   id: number,
-  patch: Partial<Pick<Project, "name" | "color" | "description" | "pinned">> & { touch?: boolean },
+  patch: Partial<Pick<Project, "name" | "color" | "description" | "pinned" | "autoRun" | "autoPermissionMode">> & {
+    touch?: boolean;
+  },
 ): Project | undefined {
   const current = getProject(id);
   if (!current) return undefined;
@@ -86,12 +100,14 @@ export function updateProject(
   const provided = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
   const next = { ...current, ...provided };
   db.prepare(
-    "UPDATE projects SET name = ?, color = ?, description = ?, pinned = ?, last_opened_at = ? WHERE id = ?",
+    "UPDATE projects SET name = ?, color = ?, description = ?, pinned = ?, auto_run = ?, auto_permission_mode = ?, last_opened_at = ? WHERE id = ?",
   ).run(
     next.name,
     next.color,
     next.description,
     next.pinned ? 1 : 0,
+    next.autoRun ? 1 : 0,
+    next.autoPermissionMode,
     patch.touch ? new Date().toISOString() : (current.lastOpenedAt ?? null),
     id,
   );

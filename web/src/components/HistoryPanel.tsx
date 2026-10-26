@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { ArrowLeft, GitBranch, History, MessageSquareShare, Search } from "lucide-react";
 import { api } from "../lib/api.ts";
 import { href, navigate } from "../lib/router.ts";
-import { chat, useChat } from "../lib/chatStore.ts";
+import { chat } from "../lib/chatStore.ts";
 import { formatBytes, timeAgo } from "../lib/util.ts";
 import { Button, Empty, ErrorNote } from "./ui.tsx";
 import { Transcript } from "./Transcript.tsx";
@@ -89,7 +89,6 @@ export function HistoryPanel({ projectId, sessionId }: { projectId: number; sess
 
 function SessionDetail({ projectId, sessionId }: { projectId: number; sessionId: string }) {
   const t = useQuery({ queryKey: ["session", projectId, sessionId], queryFn: () => api.session(projectId, sessionId) });
-  const live = useChat(projectId);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -104,8 +103,8 @@ function SessionDetail({ projectId, sessionId }: { projectId: number; sessionId:
         <Button
           variant="primary"
           size="sm"
-          disabled={!t.data || live.running}
-          title={live.running ? "A chat is already running in this project" : "Continue this session in the chat tab"}
+          disabled={!t.data}
+          title="Continue this session in the chat tab"
           onClick={() => {
             if (!t.data) return;
             chat.resume(projectId, sessionId, t.data.title, t.data.items);

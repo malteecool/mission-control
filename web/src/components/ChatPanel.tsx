@@ -3,6 +3,8 @@ import { MessageSquarePlus, Send, ShieldAlert, Sparkles, Square } from "lucide-r
 import type { PermissionMode, PermissionReply } from "../lib/api.ts";
 import { chat, useChat } from "../lib/chatStore.ts";
 import { Button, Empty, ErrorNote, Kbd } from "./ui.tsx";
+import clsx from "clsx";
+import { activeRuns, useRuns } from "../lib/runs.ts";
 import { Transcript } from "./Transcript.tsx";
 import { PermissionCard } from "./PermissionCard.tsx";
 import { QuestionCard, askQuestions } from "./QuestionCard.tsx";
@@ -51,6 +53,9 @@ export function ChatPanel({ projectId }: { projectId: number }) {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
   }, [s.composer]);
 
+  // The project's other active runs (task sessions, chats started elsewhere) you can switch to.
+  const others = activeRuns(useRuns(), projectId).filter((r) => r.id !== s.runId);
+
   const send = () => chat.send(projectId, s.composer);
   const mode = MODES.find((m) => m.value === s.permissionMode)!;
 
@@ -58,6 +63,11 @@ export function ChatPanel({ projectId }: { projectId: number }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 px-6 py-3">
         <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500">
+          {s.taskId && (
+            <span className="mr-2 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--accent)]">
+              Task
+            </span>
+          )}
           {s.sessionId ? (
             <>
               <span className="text-slate-300">{s.sessionTitle ?? "Session"}</span> · {s.sessionId.slice(0, 8)}
@@ -94,10 +104,45 @@ export function ChatPanel({ projectId }: { projectId: number }) {
             </option>
           ))}
         </select>
-        <Button size="sm" onClick={() => chat.newSession(projectId)} disabled={s.running || (!s.sessionId && !s.items.length)}>
+        <Button
+          size="sm"
+          onClick={() => chat.newSession(projectId)}
+          disabled={!s.sessionId && !s.items.length}
+          title="Start a new conversation (anything running keeps running)"
+        >
           <MessageSquarePlus size={13} /> New
         </Button>
       </div>
+
+      {others.length > 0 && (
+        <div className="flex shrink-0 flex-wrap gap-1.5 px-6 pb-2">
+          {others.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => chat.attach(projectId, r)}
+              className={clsx(
+                "flex max-w-[280px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition",
+                r.permissions.length
+                  ? "animate-pulse border-amber-400/50 bg-amber-400/10 text-amber-200"
+                  : "border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25",
+              )}
+              title="Switch to this run"
+            >
+              <span
+                className={clsx(
+                  "h-1.5 w-1.5 shrink-0 rounded-full",
+                  r.permissions.length ? "bg-amber-400" : r.status === "queued" ? "bg-slate-500" : "bg-[var(--accent)]",
+                )}
+              />
+              {r.taskId && <span className="font-mono text-[9px] uppercase tracking-wider opacity-70">task</span>}
+              <span className="truncate">{r.title}</span>
+              <span className="shrink-0 font-mono text-[9px] opacity-70">
+                {r.permissions.length ? "needs you" : r.status === "queued" ? "queued" : "running"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div
         ref={scrollRef}

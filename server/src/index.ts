@@ -13,9 +13,11 @@ import {
   COLORS,
 } from "./db.ts";
 import { getGitInfo } from "./lib/git.ts";
-import { createTask, deleteTask, readTasks, updateTask, validateTaskInput } from "./lib/tasks.ts";
+import { createTask, deleteTask, getTask, readTasks, updateTask, validateTaskInput } from "./lib/tasks.ts";
 import { discoverProjects, lastSessionAt, listSessions, locateSession, readTranscript } from "./lib/claudeSessions.ts";
-import { PERMISSION_MODES, answerPermission, startRun, stopRun } from "./lib/claudeRunner.ts";
+import { PERMISSION_MODES, answerPermission } from "./lib/claudeRunner.ts";
+import { createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
+import { applyOutcome, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
 import type { ChatRequest, Overview, PermissionReply, Project, ProjectSummary, Task, TaskStatus } from "./types.ts";
 
 // Not plain PORT: dev tools often set that for the web app, which would make both servers fight over one port.
@@ -101,11 +103,15 @@ app.patch("/api/projects/:id", async (c) => {
   const p = projectOr404(c.req.param("id"));
   const body = await c.req.json<Partial<Project> & { touch?: boolean }>();
   if (body.color !== undefined && !COLORS.includes(body.color)) throw new HttpError(400, "Unknown color");
+  if (body.autoPermissionMode !== undefined && !PERMISSION_MODES.includes(body.autoPermissionMode))
+    throw new HttpError(400, "Unknown permission mode");
   const updated = updateProject(p.id, {
     name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined,
     description: typeof body.description === "string" ? body.description : undefined,
     color: body.color,
     pinned: typeof body.pinned === "boolean" ? body.pinned : undefined,
+    autoRun: typeof body.autoRun === "boolean" ? body.autoRun : undefined,
+    autoPermissionMode: body.autoPermissionMode,
     touch: body.touch === true,
   });
   return c.json(await summarise(updated!));
@@ -133,14 +139,36 @@ app.patch("/api/projects/:id/tasks/:taskId", async (c) => {
   const p = projectOr404(c.req.param("id"));
   const input = validateTaskInput(await c.req.json(), false);
   if (typeof input === "string") throw new HttpError(400, input);
-  const task = await updateTask(p.path, c.req.param("taskId"), input);
+  const taskId = c.req.param("taskId");
+  const before = await getTask(p.path, taskId);
+  if (!before) throw new HttpError(404, "Task not found");
+
+  const entering = input.status === "doing" && before.status !== "doing";
+  const leaving = input.status !== undefined && input.status !== "doing" && before.status === "doing";
+  // Claude's notes about its last attempt only make sense while the card is in progress.
+  if (leaving) Object.assign(input, { agentStatus: undefined, agentNote: undefined });
+
+  const task = await updateTask(p.path, taskId, input);
   if (!task) throw new HttpError(404, "Task not found");
+  if (leaving) stopTaskRun(taskId);
+  if (entering && p.autoRun && fs.existsSync(p.path)) startTaskRun(p, task);
   return c.json(task);
+});
+
+// Start (or retry) a Claude session for a task by hand; moves it to "In progress" if needed.
+app.post("/api/projects/:id/tasks/:taskId/run", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  let task = await getTask(p.path, c.req.param("taskId"));
+  if (!task) throw new HttpError(404, "Task not found");
+  if (task.status !== "doing") task = (await updateTask(p.path, task.id, { status: "doing" }))!;
+  return c.json(startTaskRun(p, task), 201);
 });
 
 app.delete("/api/projects/:id/tasks/:taskId", async (c) => {
   const p = projectOr404(c.req.param("id"));
   if (!(await deleteTask(p.path, c.req.param("taskId")))) throw new HttpError(404, "Task not found");
+  stopTaskRun(c.req.param("taskId"));
   return c.body(null, 204);
 });
 
@@ -172,21 +200,44 @@ app.post("/api/projects/:id/chat", async (c) => {
   }
   if (!fs.existsSync(cwd)) throw new HttpError(400, `Project folder not found: ${cwd}`);
 
-  const stream = startRun({
-    cwd,
-    prompt: body.prompt,
-    sessionId: body.sessionId,
-    model: body.model || undefined,
-    permissionMode,
+  const run = createRun({
+    projectId: p.id,
+    title: body.prompt.trim().slice(0, 80),
+    launch: { cwd, prompt: body.prompt, sessionId: body.sessionId, model: body.model || undefined, permissionMode },
+    hooks: {
+      // Replying in a task's session (e.g. after Claude said it was blocked) is work on that task.
+      onFinish: (info, last) => {
+        if (!info.sessionId) return;
+        taskForSession(p, info.sessionId)
+          .then((t) => t && applyOutcome(p, t.id, info, last))
+          .catch((err) => console.error("Task automation:", err));
+      },
+    },
   });
+  return c.json(run, 201);
+});
+
+// ── Runs ────────────────────────────────────────────────────────────────────
+
+app.get("/api/runs", (c) => {
+  const projectId = c.req.query("projectId");
+  return c.json(listRuns(projectId ? Number(projectId) : undefined));
+});
+
+app.get("/api/runs/:runId/events", (c) => {
+  const stream = runEventStream(c.req.param("runId"));
+  if (!stream) throw new HttpError(404, "Run not found (finished runs are kept for 15 minutes)");
   return new Response(stream, {
     headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" },
   });
 });
 
-app.post("/api/chat/:runId/stop", (c) => c.json({ stopped: stopRun(c.req.param("runId")) }));
+app.post("/api/runs/:runId/stop", (c) => {
+  if (!getRun(c.req.param("runId"))) throw new HttpError(404, "Run not found");
+  return c.json({ stopped: stopRun(c.req.param("runId")) });
+});
 
-app.post("/api/chat/:runId/permission", async (c) => {
+app.post("/api/runs/:runId/permission", async (c) => {
   const body = await c.req.json<Partial<PermissionReply>>();
   if (typeof body.requestId !== "string" || typeof body.allow !== "boolean")
     throw new HttpError(400, "requestId and allow are required");

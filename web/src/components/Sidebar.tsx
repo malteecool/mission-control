@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { FolderX, LayoutGrid, Pin, Plus } from "lucide-react";
 import type { ProjectSummary } from "../lib/api.ts";
 import { href, useRoute } from "../lib/router.ts";
-import { useProjectsAwaitingApproval, useRunningProjects } from "../lib/chatStore.ts";
+import { activeRuns, useRuns } from "../lib/runs.ts";
 import { timeAgo } from "../lib/util.ts";
 import { Dot } from "./ui.tsx";
 
@@ -17,8 +17,9 @@ export function Sidebar({
   onAdd: () => void;
 }) {
   const route = useRoute();
-  const running = useRunningProjects();
-  const awaiting = useProjectsAwaitingApproval();
+  const live = activeRuns(useRuns());
+  const running = live.map((r) => r.projectId);
+  const awaiting = live.filter((r) => r.permissions.length).map((r) => r.projectId);
   const activeId = route.name === "project" ? route.id : undefined;
 
   return (

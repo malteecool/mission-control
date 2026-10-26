@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Command } from "lucide-react";
 import { api } from "./lib/api.ts";
 import { useRoute } from "./lib/router.ts";
+import { useRefreshOnRunFinished } from "./lib/runs.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { AddProjectDialog } from "./components/AddProjectDialog.tsx";
@@ -13,6 +14,7 @@ import { Kbd } from "./components/ui.tsx";
 export function App() {
   const route = useRoute();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects, refetchInterval: 30_000 });
+  useRefreshOnRunFinished();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
