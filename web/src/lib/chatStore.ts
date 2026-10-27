@@ -170,7 +170,14 @@ export const chat = {
   /** View a run that's already going (or recently finished), e.g. a task's. */
   attach(projectId: number, run: RunInfo) {
     if (get(projectId).runId === run.id && subscriptions.has(projectId)) return;
-    fresh(projectId, { sessionId: run.sessionId, sessionTitle: run.title, taskId: run.taskId });
+    // Show the mode and model the run really uses (a task session runs in its project's mode, not the chat's).
+    fresh(projectId, {
+      sessionId: run.sessionId,
+      sessionTitle: run.title,
+      taskId: run.taskId,
+      permissionMode: run.permissionMode,
+      model: run.model ?? "",
+    });
     void follow(projectId, run.id);
   },
 

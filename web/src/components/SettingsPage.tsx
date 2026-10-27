@@ -54,8 +54,9 @@ export function SettingsPage() {
       <Section
         icon={<ListChecks size={15} />}
         title="Task sessions"
-        hint="Sessions started when a task moves to In progress. Auto-start and the permission mode are set per project, in its settings."
+        hint="Sessions started when a task moves to In progress. They don't use the chat settings above."
       >
+        <TaskModeRow mode={s.newProjectPermissionMode} onDefault={(newProjectPermissionMode) => set({ newProjectPermissionMode })} />
         <Row label="Model">
           <ModelPicker
             value={s.taskModel}
@@ -75,7 +76,7 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section icon={<FolderPlus size={15} />} title="New projects" hint="Task automation settings a project gets when you add it.">
+      <Section icon={<FolderPlus size={15} />} title="New projects" hint="Task automation a project gets when you add it. Change it per project in its settings.">
         <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-200">
           <input
             type="checkbox"
@@ -85,9 +86,6 @@ export function SettingsPage() {
           />
           Start a Claude session when a task moves to In progress
         </label>
-        <Row label="Task sessions run in">
-          <ModeSelect value={s.newProjectPermissionMode} onChange={(newProjectPermissionMode) => set({ newProjectPermissionMode })} />
-        </Row>
       </Section>
 
       <NotificationSection />
@@ -96,6 +94,31 @@ export function SettingsPage() {
 
       <ClaudeSection path={s.claudePath} onSave={(claudePath) => set({ claudePath })} />
     </div>
+  );
+}
+
+/** The permission mode every project's task sessions use. Each project stores its own; this sets them all at once,
+ *  plus the one new projects get, and says "Mixed" when they differ. */
+function TaskModeRow({ mode, onDefault }: { mode: PermissionMode; onDefault: (m: PermissionMode) => void }) {
+  const qc = useQueryClient();
+  const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  const modes = new Set([mode, ...(projects.data ?? []).map((p) => p.autoPermissionMode)]);
+  const value = modes.size === 1 ? mode : MIXED;
+  const setAll = useMutation({
+    mutationFn: async (m: PermissionMode) => {
+      onDefault(m);
+      await Promise.all((projects.data ?? []).map((p) => api.updateProject(p.id, { autoPermissionMode: m })));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+  });
+  const hint = value === MIXED ? "Projects differ; pick one to use it for all of them." : MODES.find((m) => m.value === value)?.hint;
+  return (
+    <>
+      <Row label="Permission mode" hint={hint}>
+        <ModeSelect value={value} onChange={(m) => setAll.mutate(m)} mixed={value === MIXED} />
+      </Row>
+      {setAll.error && <ErrorNote>{setAll.error.message}</ErrorNote>}
+    </>
   );
 }
 
@@ -267,9 +290,16 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   );
 }
 
-function ModeSelect({ value, onChange }: { value: PermissionMode; onChange: (m: PermissionMode) => void }) {
+const MIXED = "__mixed";
+
+function ModeSelect({ value, onChange, mixed }: { value: string; onChange: (m: PermissionMode) => void; mixed?: boolean }) {
   return (
     <select value={value} onChange={(e) => onChange(e.target.value as PermissionMode)} className={field}>
+      {mixed && (
+        <option value={MIXED} disabled className="bg-slate-900">
+          Mixed
+        </option>
+      )}
       {MODES.map((m) => (
         <option key={m.value} value={m.value} className="bg-slate-900">
           {m.label}

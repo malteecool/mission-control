@@ -68,6 +68,9 @@ export interface RunInfo {
   finishedAt?: string;
   /** Approvals and questions waiting for you. */
   permissions: PermissionRequest[];
+  /** The mode and model the run was started with. */
+  permissionMode: PermissionMode;
+  model?: string;
   error?: string;
 }
 

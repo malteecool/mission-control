@@ -49,6 +49,8 @@ export function createRun(opts: {
       status: "queued",
       startedAt: new Date().toISOString(),
       permissions: [],
+      permissionMode: opts.launch.permissionMode,
+      model: opts.launch.model,
     },
     launch: opts.launch,
     queueKey: opts.queueKey,

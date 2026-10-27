@@ -54,7 +54,8 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   `TASK_STATUS: blocked - …` (it stays in progress with Claude's question; reply in that session and the card moves
   once Claude confirms). Failed or stopped runs stay in progress with the error. Moving the card out of *In progress*
   stops its run. One task runs at a time per project; the rest queue. Auto-start and the permission mode for task
-  sessions are per-project settings.
+  sessions are per-project settings, separate from the chat's mode; Settings → Task sessions sets the mode for all
+  projects at once.
 - **Runs live on the server,** so chats and task sessions keep going when you navigate away or reload. Cards and
   the chat show what's running; open one to watch it or answer approvals.
 - **Chat** runs `claude -p --output-format stream-json` in the project folder, using your normal Claude login.
@@ -64,7 +65,7 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   the task card's **Review** still works). "Accept edits" auto-approves file edits, asking only before shell
   commands. "Full access" auto-approves everything.
 - **Settings** (sidebar, or Ctrl+K) holds dashboard-wide defaults: the model and permission mode new chats start
-  with, the model and standing instructions for task sessions, the automation settings new projects get, desktop
+  with, the permission mode, model and standing instructions for task sessions, the automation settings new projects get, desktop
   notifications (per browser), and which `claude` executable to run.
 - **History** reads Claude Code's own session files (`~/.claude/projects/…`), so it includes chats from the terminal
   and desktop app too. Any session can be resumed from the dashboard.
