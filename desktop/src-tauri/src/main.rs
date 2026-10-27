@@ -8,7 +8,6 @@ mod approvals;
 mod hotkey;
 
 use std::fs::{self, File};
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -30,9 +29,10 @@ fn api_port() -> u16 {
     std::env::var("DASHBOARD_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4317)
 }
 
+/// Whether the dashboard API answers. A bare TCP connect isn't enough: on Windows `connect_timeout` can report
+/// success against a port nobody listens on yet, which opened the window onto a connection-refused page.
 fn api_up(port: u16) -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    api::get(port, "/api/settings").is_some()
 }
 
 /// The repo the app was built from. `DASHBOARD_ROOT` overrides it, e.g. after moving the checkout.
