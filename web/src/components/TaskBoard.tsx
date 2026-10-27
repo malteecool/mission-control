@@ -2,14 +2,15 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight, ListTodo, Play, Plus, Trash2 } from "lucide-react";
-import { api, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus } from "../lib/api.ts";
+import { ChevronLeft, ChevronRight, FileDiff, ListTodo, Play, Plus, Trash2 } from "lucide-react";
+import { api, type ChangeSummary, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus, type UsageTotals } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
 import { activeRunForTask, useRuns } from "../lib/runs.ts";
 import { useTaskWatch } from "../lib/taskWatch.ts";
-import { AgentStrip } from "./AgentStrip.tsx";
-import { KIND_STYLE, timeAgo } from "../lib/util.ts";
+import { AgentStrip, Strip, StripButton } from "./AgentStrip.tsx";
+import { ReviewDialog } from "./ReviewDialog.tsx";
+import { KIND_STYLE, formatUsd, timeAgo } from "../lib/util.ts";
 import { Empty, ErrorNote, IconButton, Kbd } from "./ui.tsx";
 
 const COLUMNS: Array<{ status: TaskStatus; label: string; color: string }> = [
@@ -44,6 +45,17 @@ export function TaskBoard({ projectId }: { projectId: number }) {
   useTaskWatch(projectId);
   const project = useQuery({ queryKey: ["project", projectId], queryFn: () => api.project(projectId) });
   const runs = useRuns();
+  const usage = useQuery({ queryKey: ["usage", projectId], queryFn: () => api.usage(projectId) });
+  const usageByTask = useMemo(() => new Map(usage.data?.tasks.map((t) => [t.taskId, t])), [usage.data]);
+  // Refetched whenever a task's snapshots change (they live in tasks.json, which the board already watches).
+  const reviewKey = (tasks.data ?? []).map((t) => (t.review ? `${t.id}:${t.review.base}:${t.review.end}` : "")).join("|");
+  const changes = useQuery({
+    queryKey: ["changes", projectId, reviewKey],
+    queryFn: () => api.changeSummaries(projectId),
+    enabled: !!reviewKey.replace(/\|/g, ""),
+  });
+  const changesByTask = useMemo(() => new Map(changes.data?.map((c) => [c.taskId, c])), [changes.data]);
+  const [reviewing, setReviewing] = useState<string | null>(null);
   const autoRun = project.data?.autoRun ?? true;
   const [draft, setDraft] = useState("");
   const [filter, setFilter] = useState<TaskKind | "all">("all");
@@ -193,6 +205,9 @@ export function TaskBoard({ projectId }: { projectId: number }) {
                       onNotes={(notes) => update.mutate({ id: t.id, notes })}
                       onDelete={() => remove.mutate(t.id)}
                       run={activeRunForTask(runs, t.id)}
+                      usage={usageByTask.get(t.id)}
+                      changes={t.review ? changesByTask.get(t.id) : undefined}
+                      onReview={() => setReviewing(t.id)}
                       autoRun={autoRun}
                       onStart={() => startRun.mutate({ id: t.id })}
                       onResume={() => startRun.mutate({ id: t.id, resume: true })}
@@ -206,6 +221,11 @@ export function TaskBoard({ projectId }: { projectId: number }) {
           ))}
         </div>
       )}
+      <ReviewDialog
+        projectId={projectId}
+        task={tasks.data?.find((t) => t.id === reviewing) ?? null}
+        onClose={() => setReviewing(null)}
+      />
     </div>
   );
 }
@@ -227,6 +247,9 @@ function TaskCard({
   onNotes,
   onDelete,
   run,
+  usage,
+  changes,
+  onReview,
   autoRun,
   onStart,
   onResume,
@@ -243,6 +266,9 @@ function TaskCard({
   onNotes: (notes: string) => void;
   onDelete: () => void;
   run?: RunInfo;
+  usage?: UsageTotals;
+  changes?: ChangeSummary;
+  onReview: () => void;
   autoRun: boolean;
   onStart: () => void;
   onResume: () => void;
@@ -315,6 +341,14 @@ function TaskCard({
             P{t.priority}
           </button>
           <span className="font-mono text-[10px] text-slate-600">{timeAgo(done ? t.doneAt : t.updatedAt)}</span>
+          {usage && (
+            <span
+              className="font-mono text-[10px] text-slate-500"
+              title={`Claude so far: ${usage.runs} runs · ${usage.turns} turns`}
+            >
+              {formatUsd(usage.costUsd)}
+            </span>
+          )}
 
           <div className="ml-auto flex items-center opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
             {!done && !run && (
@@ -353,6 +387,17 @@ function TaskCard({
           onOpenRun={onOpenRun}
           onOpenSession={onOpenSession}
         />
+        {changes && !run && (
+          <Strip
+            tone={done ? "accent" : "muted"}
+            icon={<FileDiff size={11} />}
+            text={`Claude changed ${changes.files} file${changes.files === 1 ? "" : "s"} · +${changes.added} −${changes.removed}`}
+          >
+            <StripButton strong={done} onClick={onReview}>
+              Review
+            </StripButton>
+          </Strip>
+        )}
       </div>
     </motion.div>
   );

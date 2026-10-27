@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { CheckSquare, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, Trash2 } from "lucide-react";
+import { CheckSquare, CircleDollarSign, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, Trash2 } from "lucide-react";
 import { api, type PermissionMode } from "../lib/api.ts";
 import { href, navigate, type Route, type Tab } from "../lib/router.ts";
 import { activeRuns, useRuns } from "../lib/runs.ts";
@@ -11,6 +11,7 @@ import { Button, Dot, ErrorNote, IconButton, Modal, ModalHeader } from "./ui.tsx
 import { TaskBoard } from "./TaskBoard.tsx";
 import { ChatPanel } from "./ChatPanel.tsx";
 import { HistoryPanel } from "./HistoryPanel.tsx";
+import { UsagePanel } from "./UsagePanel.tsx";
 
 const COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#fb7185", "#2dd4bf"];
 
@@ -53,6 +54,7 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
           : undefined,
     },
     { id: "history", label: "History", icon: <History size={14} /> },
+    { id: "usage", label: "Usage", icon: <CircleDollarSign size={14} /> },
   ];
 
   return (
@@ -136,6 +138,11 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
         {p.exists && route.tab === "tasks" && <TaskBoard projectId={p.id} />}
         {p.exists && route.tab === "chat" && <ChatPanel projectId={p.id} />}
         {route.tab === "history" && <HistoryPanel projectId={p.id} sessionId={route.sessionId} />}
+        {route.tab === "usage" && (
+          <div className="mx-auto max-w-5xl p-6">
+            <UsagePanel projectId={p.id} />
+          </div>
+        )}
       </div>
 
       <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)}>

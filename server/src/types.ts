@@ -23,6 +23,53 @@ export interface Task {
   agentStatus?: "blocked" | "failed";
   /** Claude's explanation (or the error) that goes with agentStatus. */
   agentNote?: string;
+  /** Snapshots of the files around the task's sessions, so you can review what they changed. Cleared once reviewed. */
+  review?: TaskReview;
+}
+
+/** Git tree objects recording the project's working tree (untracked files included) around a task's sessions. */
+export interface TaskReview {
+  /** Before the task's first run since it was last reviewed. */
+  base: string;
+  /** After its latest run ended; missing while a run is going or if one was cut off. */
+  end?: string;
+  /** HEAD at those two moments, to spot commits the sessions made themselves. */
+  head?: string;
+  endHead?: string;
+  startedAt: string;
+}
+
+export interface ChangedFile {
+  /** Relative to the repository root, with forward slashes. */
+  path: string;
+  status: "added" | "modified" | "deleted";
+  added: number;
+  removed: number;
+  binary: boolean;
+  /** The file's unified diff; empty when it was too large to send. */
+  patch: string;
+  truncated?: boolean;
+}
+
+/** What a task's sessions changed, from GET /api/projects/:id/tasks/:taskId/changes. */
+export interface TaskChanges {
+  taskId: string;
+  files: ChangedFile[];
+  /** No end snapshot yet, so this compares with the files as they are now (which may include others' edits). */
+  live: boolean;
+  /** Commits the sessions made themselves, "<hash> <subject>". */
+  commits: string[];
+  since?: string;
+  /** Git has cleaned up the snapshots, so the changes can't be shown any more. */
+  missing?: boolean;
+}
+
+/** One entry per task with changes to review, from GET /api/projects/:id/changes. */
+export interface ChangeSummary {
+  taskId: string;
+  files: number;
+  added: number;
+  removed: number;
 }
 
 export interface TaskFile {
@@ -225,4 +272,26 @@ export interface Overview {
   counts: Record<TaskStatus, number>;
   nextUp: Array<Task & { projectId: number; projectName: string; projectColor: string }>;
   recentlyDone: Array<Task & { projectId: number; projectName: string; projectColor: string }>;
+}
+
+export interface UsageTotals {
+  costUsd: number;
+  runs: number;
+  turns: number;
+}
+
+/** Cost and turns of finished Claude runs, from GET /api/usage (optionally for one project). */
+export interface UsageReport {
+  /** Everything recorded. */
+  total: UsageTotals;
+  /** Today, in the server's local time. */
+  today: UsageTotals;
+  /** The days covered by `days`. */
+  period: UsageTotals;
+  /** One entry per day, oldest first, including days with nothing. `day` is YYYY-MM-DD. */
+  days: Array<UsageTotals & { day: string }>;
+  /** Most expensive first. */
+  projects: Array<UsageTotals & { projectId: number; name: string; color: string }>;
+  /** Task runs plus chat turns in a task's session; most expensive first. */
+  tasks: Array<UsageTotals & { projectId: number; taskId: string; title: string; status?: TaskStatus; lastRunAt: string }>;
 }

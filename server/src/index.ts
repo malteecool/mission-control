@@ -17,9 +17,11 @@ import { createTask, deleteTask, getTask, readTasks, updateTask, validateTaskInp
 import { discoverProjects, lastSessionAt, listSessions, locateSession, readTranscript } from "./lib/claudeSessions.ts";
 import { PERMISSION_MODES, answerPermission, claudeInfo } from "./lib/claudeRunner.ts";
 import { getSettings, MODEL_RE, updateSettings, validateSettings } from "./lib/settings.ts";
-import { createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
-import { applyOutcome, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
+import { activeRunForTask, createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
+import { finishTaskTurn, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
+import { ReviewError, changeSummaries, commitChanges, dismissReview, revertChanges, taskChanges } from "./lib/review.ts";
 import { watchTasksStream } from "./lib/taskWatcher.ts";
+import { usageReport } from "./lib/usage.ts";
 import type { ChatRequest, DesktopStatus, Overview, PermissionReply, Project, ProjectSummary, Task, TaskStatus } from "./types.ts";
 
 // Not plain PORT: dev tools often set that for the web app, which would make both servers fight over one port.
@@ -63,7 +65,7 @@ class HttpError extends Error {
   }
 }
 app.onError((err, c) => {
-  if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+  if (err instanceof HttpError || err instanceof ReviewError) return c.json({ error: err.message }, err.status);
   if (err instanceof SyntaxError) return c.json({ error: "Invalid JSON body" }, 400);
   console.error(err);
   return c.json({ error: err.message }, 500);
@@ -198,15 +200,60 @@ app.patch("/api/projects/:id/tasks/:taskId", async (c) => {
 
 // Start (or retry) a Claude session for a task by hand; moves it to "In progress" if needed.
 // `{ "resume": true }` continues the task's last session, e.g. one cut off by a restart.
+// `{ "feedback": "…" }` asks for changes after reviewing what the task did, in its session if it has one.
 app.post("/api/projects/:id/tasks/:taskId/run", async (c) => {
   const p = projectOr404(c.req.param("id"));
   if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
-  const body = (await c.req.json().catch(() => ({}))) as { resume?: unknown };
+  const body = (await c.req.json().catch(() => ({}))) as { resume?: unknown; feedback?: unknown };
+  if (body.feedback !== undefined && (typeof body.feedback !== "string" || !body.feedback.trim()))
+    throw new HttpError(400, "feedback must be a non-empty string");
+  const feedback = typeof body.feedback === "string" ? body.feedback.trim().slice(0, 10_000) : undefined;
   let task = await getTask(p.path, c.req.param("taskId"));
   if (!task) throw new HttpError(404, "Task not found");
   if (body.resume === true && !task.sessionId) throw new HttpError(400, "This task has no Claude session to resume");
   if (task.status !== "doing") task = (await updateTask(p.path, task.id, { status: "doing" }))!;
-  return c.json(startTaskRun(p, task, { resume: body.resume === true }), 201);
+  return c.json(startTaskRun(p, task, { resume: body.resume === true, feedback }), 201);
+});
+
+// ── Reviewing what a task changed ───────────────────────────────────────────
+
+// Which tasks on the board have changes waiting for review.
+app.get("/api/projects/:id/changes", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  return c.json(fs.existsSync(p.path) ? await changeSummaries(p) : []);
+});
+
+app.get("/api/projects/:id/tasks/:taskId/changes", async (c) =>
+  c.json(await taskChanges(projectOr404(c.req.param("id")), c.req.param("taskId"))),
+);
+
+// Commit and Revert take `paths` (default: every changed file), and wait until Claude has stopped working on the task.
+async function reviewRequest(projectId: string, taskId: string, raw: unknown) {
+  const p = projectOr404(projectId);
+  if (activeRunForTask(taskId)) throw new HttpError(409, "Claude is still working on this task");
+  const body = (raw ?? {}) as { paths?: unknown; message?: unknown };
+  if (body.paths !== undefined && (!Array.isArray(body.paths) || body.paths.some((x) => typeof x !== "string")))
+    throw new HttpError(400, "paths must be a list of file paths");
+  return { p, body, paths: body.paths as string[] | undefined };
+}
+
+app.post("/api/projects/:id/tasks/:taskId/changes/commit", async (c) => {
+  const taskId = c.req.param("taskId");
+  const { p, body, paths } = await reviewRequest(c.req.param("id"), taskId, await c.req.json().catch(() => null));
+  if (typeof body.message !== "string" || !body.message.trim()) throw new HttpError(400, "A commit message is required");
+  return c.json(await commitChanges(p, taskId, body.message.trim().slice(0, 5000), paths));
+});
+
+app.post("/api/projects/:id/tasks/:taskId/changes/revert", async (c) => {
+  const taskId = c.req.param("taskId");
+  const { p, paths } = await reviewRequest(c.req.param("id"), taskId, await c.req.json().catch(() => null));
+  return c.json(await revertChanges(p, taskId, paths));
+});
+
+// Done reviewing: forgets the snapshots and leaves the files as they are.
+app.delete("/api/projects/:id/tasks/:taskId/changes", async (c) => {
+  await dismissReview(projectOr404(c.req.param("id")), c.req.param("taskId"));
+  return c.body(null, 204);
 });
 
 app.delete("/api/projects/:id/tasks/:taskId", async (c) => {
@@ -253,7 +300,7 @@ app.post("/api/projects/:id/chat", async (c) => {
       onFinish: (info, last) => {
         if (!info.sessionId) return;
         taskForSession(p, info.sessionId)
-          .then((t) => t && applyOutcome(p, t.id, info, last))
+          .then((t) => t && finishTaskTurn(p, t.id, info, last))
           .catch((err) => console.error("Task automation:", err));
       },
     },
@@ -304,6 +351,17 @@ app.post("/api/runs/:runId/permission", async (c) => {
 });
 
 // ── Overview ────────────────────────────────────────────────────────────────
+
+// ── Usage ───────────────────────────────────────────────────────────────────
+
+// `?projectId=` narrows it to one project; `?days=` sets how many days the daily series covers (default 30).
+app.get("/api/usage", async (c) => {
+  const projectId = c.req.query("projectId");
+  if (projectId !== undefined) projectOr404(projectId);
+  const days = Number(c.req.query("days") ?? 30);
+  if (!Number.isInteger(days) || days < 1 || days > 366) throw new HttpError(400, "days must be between 1 and 366");
+  return c.json(await usageReport({ projectId: projectId === undefined ? undefined : Number(projectId), days }));
+});
 
 app.get("/api/overview", async (c) => {
   const projects = listProjects();

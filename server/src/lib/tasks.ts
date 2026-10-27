@@ -56,7 +56,7 @@ async function writeTasks(projectPath: string, tasks: Task[]): Promise<void> {
 }
 
 export type TaskInput = Partial<
-  Pick<Task, "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote">
+  Pick<Task, "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review">
 >;
 
 export function validateTaskInput(input: unknown, requireTitle: boolean): TaskInput | string {

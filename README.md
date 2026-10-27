@@ -56,6 +56,15 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   stops its run. One task runs at a time per project; the rest queue. Auto-start and the permission mode for task
   sessions are per-project settings, separate from the chat's mode; Settings → Task sessions sets the mode for all
   projects at once.
+- **Reviewing a task's changes:** in a git project, the dashboard snapshots the files (untracked ones included, as a
+  git tree object, without touching your index) before a task's first run and again whenever a run in its session
+  ends. The card then says how many files Claude changed; **Review** lists them with their diffs and offers
+  **Commit** (just those files, as Claude left them, on top of HEAD; anything else you've staged stays out),
+  **Revert** (all, or one file at a time; a file that's changed again since is left alone), **Ask for changes**
+  (continues the task's session with your feedback and moves the card back to *In progress*) and **Keep
+  uncommitted**. Because it compares the two snapshots, edits made by you or other tasks don't show up in a task's
+  review. `.dashboard/tasks.json` is left out. The snapshots aren't referenced by any branch, so a `git gc` more than
+  two weeks later can remove them; the review then says so and can only be dismissed.
 - **Runs live on the server,** so chats and task sessions keep going when you navigate away or reload. Cards and
   the chat show what's running; open one to watch it or answer approvals.
 - **Chat** runs `claude -p --output-format stream-json` in the project folder, using your normal Claude login.
@@ -69,6 +78,10 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   notifications (per browser), and which `claude` executable to run.
 - **History** reads Claude Code's own session files (`~/.claude/projects/…`), so it includes chats from the terminal
   and desktop app too. Any session can be resumed from the dashboard.
+- **Cost and usage:** when a dashboard run finishes, its reported cost and turns are stored in `dashboard.db`. The
+  overview totals them per day, per project and per task, each project has a **Usage** tab, and task cards show
+  what they've cost so far. Chat replies in a task's session count towards that task. Runs that are stopped
+  before Claude reports a result have no cost to record, and sessions run outside the dashboard aren't counted.
 
 The API only accepts requests to a local host name, and writes need an `x-dashboard` header, so other websites
 can't drive Claude through it.

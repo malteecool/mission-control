@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChatEvent, RunInfo } from "../types.ts";
 import { launchClaude, stopProcess, type LaunchOptions } from "./claudeRunner.ts";
+import { recordUsage } from "./usage.ts";
 
 type Listener = (ev: ChatEvent | null) => void; // null: the run is over
 
@@ -18,6 +19,8 @@ interface Run {
 }
 
 export interface RunHooks {
+  /** Awaited when the run leaves the queue, before Claude launches (e.g. to snapshot the files first). */
+  prepare?: (info: RunInfo) => Promise<void>;
   /** Called when the run actually starts (immediately, or when it leaves the queue). */
   onStart?: (info: RunInfo) => void;
   onSession?: (sessionId: string, info: RunInfo) => void;
@@ -63,7 +66,7 @@ export function createRun(opts: {
   emit(run, { type: "run", runId: run.info.id });
   emit(run, { type: "item", item: { kind: "user", id: randomUUID(), text: opts.launch.prompt, ts: run.info.startedAt } });
   pump(opts.queueKey);
-  if (!opts.queueKey) start(run);
+  if (!opts.queueKey) void start(run);
   return run.info;
 }
 
@@ -73,12 +76,23 @@ function pump(queueKey?: string) {
   const same = [...runs.values()].filter((r) => r.queueKey === queueKey);
   if (same.some((r) => r.info.status === "running")) return;
   const next = same.find((r) => r.info.status === "queued");
-  if (next) start(next);
+  if (next) void start(next);
 }
 
-function start(run: Run) {
+async function start(run: Run) {
   run.info.status = "running";
   run.info.startedAt = new Date().toISOString();
+  if (run.hooks.prepare) {
+    try {
+      await run.hooks.prepare(run.info);
+    } catch (err) {
+      console.error("Run prepare hook failed:", err);
+    }
+    if (run.stopRequested) {
+      emit(run, { type: "error", message: "Stopped before it started" });
+      return finish(run, null);
+    }
+  }
   run.hooks.onStart?.(run.info);
   let last: ChatEvent | null = null;
   launchClaude(
@@ -119,6 +133,11 @@ function finish(run: Run, last: ChatEvent | null) {
   info.permissions = [];
   for (const l of run.listeners) l(null);
   run.listeners.clear();
+  try {
+    recordUsage(info, last);
+  } catch (err) {
+    console.error("Recording run usage failed:", err);
+  }
   try {
     run.hooks.onFinish?.(info, last);
   } catch (err) {

@@ -15,6 +15,12 @@ export function timeAgo(iso?: string): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
+/** "$0.0042" for small amounts, "$1.23" otherwise. */
+export function formatUsd(n: number): string {
+  if (n === 0) return "$0";
+  return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;

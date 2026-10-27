@@ -56,16 +56,6 @@
       "doneAt": "2026-10-26T21:59:17.438Z"
     },
     {
-      "id": "c91a6de3-cd38-49d5-ba2b-f38460c39a5a",
-      "title": "Dashboard to manually handle update checks.",
-      "status": "todo",
-      "kind": "feature",
-      "priority": 2,
-      "createdAt": "2026-10-27T18:34:07.472Z",
-      "updatedAt": "2026-10-27T18:35:30.963Z",
-      "notes": "Should check for Claude CLI updates and prompt the user there is a new updated. Option to accept or decline should exist. On accept new the new update should be installed.\n\nOnly to be done if this makes sense at all."
-    },
-    {
       "id": "08feeff4-5f6e-4d32-89dc-582c33697212",
       "title": "popup/notification of approvals",
       "status": "done",
@@ -142,6 +132,90 @@
       "updatedAt": "2026-10-27T19:04:07.906Z",
       "sessionId": "a805f887-4d20-43f9-9b81-8b35807df1c8",
       "doneAt": "2026-10-27T19:04:07.906Z"
+    },
+    {
+      "id": "4a3ef0fd-5826-4b93-90e9-ad714e57153a",
+      "title": "Review a task's changes before Done",
+      "notes": "Show the git diff a task session produced on its card, with Commit, Revert and Ask for changes buttons. Safety net now that task sessions run in Full access. Covers the 'Simple file explorer to keep track of edited files' task.",
+      "status": "done",
+      "kind": "feature",
+      "priority": 1,
+      "createdAt": "2026-10-27T19:31:06.859Z",
+      "updatedAt": "2026-10-27T19:58:08.092Z",
+      "sessionId": "6dbdbf4d-63b0-46ec-b4f9-79b063955440",
+      "doneAt": "2026-10-27T19:58:08.092Z"
+    },
+    {
+      "id": "2fd287db-ccb2-4a85-8352-77ca9a9beb22",
+      "title": "Plan first, then build",
+      "notes": "Per-task option to start the session in Plan mode. Show the plan on the card to approve, then continue the same session in the project's task mode.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T19:31:06.871Z",
+      "updatedAt": "2026-10-27T19:31:06.871Z"
+    },
+    {
+      "id": "292e26b1-1c71-4df1-9c06-6f2d099b68de",
+      "title": "Run tasks in parallel in git worktrees",
+      "notes": "Today one task runs at a time per project. Give each task its own worktree and branch so several can run at once; review becomes 'merge this branch'.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T19:31:06.881Z",
+      "updatedAt": "2026-10-27T19:31:06.881Z"
+    },
+    {
+      "id": "5f7ca11e-5ec9-4717-ac87-831aeb684c98",
+      "title": "Cost and usage tracking",
+      "notes": "Runs already report costUsd and numTurns. Show totals per project, per task and per day.",
+      "status": "done",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-27T19:31:06.890Z",
+      "updatedAt": "2026-10-27T19:35:42.363Z",
+      "sessionId": "a363fde6-2c70-4807-aa5f-6b26dcb57488",
+      "doneAt": "2026-10-27T19:35:42.363Z"
+    },
+    {
+      "id": "1c1f040a-91aa-4e7f-9040-6d8dece2bb11",
+      "title": "Scheduled tasks",
+      "notes": "Recurring tasks (e.g. 'Every Monday: update dependencies and run tests') that land on the board and run themselves.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-27T19:31:06.901Z",
+      "updatedAt": "2026-10-27T19:31:06.901Z"
+    },
+    {
+      "id": "024e18cd-b633-4566-95b6-656c9d1af0e6",
+      "title": "Project health on the overview",
+      "notes": "Per project: uncommitted changes, unpushed commits, last test result, stale branch warning.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-27T19:31:06.910Z",
+      "updatedAt": "2026-10-27T19:31:06.910Z"
+    },
+    {
+      "id": "ac9771f9-754d-4442-b292-67462e41022a",
+      "title": "Dev server buttons per project",
+      "notes": "Start and stop a project's dev command (npm run dev etc.) from its page, with logs and an 'open preview' link.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-27T19:31:06.920Z",
+      "updatedAt": "2026-10-27T19:31:06.920Z"
+    },
+    {
+      "id": "79bca695-d8dd-4be9-8c0a-04b2f2873dbd",
+      "title": "Search across Claude session history",
+      "notes": "Full-text search over all sessions in History, e.g. 'where did I fix that auth bug?'.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-27T19:31:06.930Z",
+      "updatedAt": "2026-10-27T19:31:06.930Z"
     }
   ]
 }

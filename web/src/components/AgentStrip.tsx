@@ -112,7 +112,7 @@ const TONES = {
   muted: "border-white/10 bg-white/[0.03] text-slate-400",
 };
 
-function Strip({
+export function Strip({
   tone,
   icon,
   text,
@@ -142,7 +142,7 @@ function Strip({
   );
 }
 
-function StripButton({ strong, onClick, children }: { strong?: boolean; onClick: () => void; children: ReactNode }) {
+export function StripButton({ strong, onClick, children }: { strong?: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       onClick={(e) => {

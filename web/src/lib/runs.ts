@@ -35,7 +35,7 @@ export function useRefreshOnRunFinished() {
       const before = seen.current.get(r.id);
       if (before && isActive({ ...r, status: before }) && !isActive(r)) {
         const refresh = () => {
-          for (const key of [["tasks", r.projectId], ["sessions", r.projectId], ["project", r.projectId], ["projects"], ["overview"]])
+          for (const key of [["tasks", r.projectId], ["sessions", r.projectId], ["project", r.projectId], ["projects"], ["overview"], ["usage"]])
             qc.invalidateQueries({ queryKey: key });
         };
         refresh();

@@ -1,4 +1,5 @@
 import type {
+  ChangeSummary,
   ChatRequest,
   DiscoveredProject,
   RunInfo,
@@ -11,6 +12,8 @@ import type {
   ClaudeInfo,
   DesktopStatus,
   Task,
+  TaskChanges,
+  UsageReport,
 } from "../../../server/src/types.ts";
 
 export type * from "../../../server/src/types.ts";
@@ -51,10 +54,22 @@ export const api = {
     request<Task>("PATCH", `/api/projects/${id}/tasks/${taskId}`, body),
   deleteTask: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}`),
 
+  changeSummaries: (id: number) => request<ChangeSummary[]>("GET", `/api/projects/${id}/changes`),
+  taskChanges: (id: number, taskId: string) => request<TaskChanges>("GET", `/api/projects/${id}/tasks/${taskId}/changes`),
+  commitChanges: (id: number, taskId: string, message: string, paths?: string[]) =>
+    request<{ commit?: string; files: number }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/commit`, { message, paths }),
+  revertChanges: (id: number, taskId: string, paths?: string[]) =>
+    request<{ reverted: string[]; skipped: string[] }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/revert`, { paths }),
+  dismissChanges: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}/changes`),
+  askForChanges: (id: number, taskId: string, feedback: string) =>
+    request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`, { feedback }),
+
   sessions: (id: number) => request<SessionSummary[]>("GET", `/api/projects/${id}/sessions`),
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),
 
   overview: () => request<Overview>("GET", "/api/overview"),
+  usage: (projectId?: number, days = 30) =>
+    request<UsageReport>("GET", `/api/usage?days=${days}${projectId === undefined ? "" : `&projectId=${projectId}`}`),
 
   settings: () => request<Settings>("GET", "/api/settings"),
   updateSettings: (body: Partial<Settings>) => request<Settings>("PATCH", "/api/settings", body),

@@ -20,6 +20,22 @@ db.exec(`
     created_at     TEXT NOT NULL,
     last_opened_at TEXT
   );
+  -- One row per finished Claude run that reported its cost; kept after the run itself is forgotten.
+  CREATE TABLE IF NOT EXISTS run_usage (
+    run_id      TEXT PRIMARY KEY,
+    project_id  INTEGER NOT NULL,
+    task_id     TEXT,
+    session_id  TEXT,
+    title       TEXT NOT NULL,
+    model       TEXT,
+    status      TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    cost_usd    REAL NOT NULL DEFAULT 0,
+    num_turns   INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS run_usage_project ON run_usage (project_id, finished_at);
 `);
 
 // Columns added after the first release; ALTER TABLE for databases created before them.
