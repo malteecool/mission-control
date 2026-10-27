@@ -104,9 +104,42 @@ fn toggle_window(app: &AppHandle) {
     }
 }
 
-fn create_window(app: &AppHandle) -> tauri::Result<()> {
-    // `App` URLs resolve to the Vite dev server under `tauri dev` and to the API server (frontendDist) otherwise.
-    let win = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("/".into()))
+/// Shown while our own server starts, so the window appears at once instead of after the wait.
+const SPLASH: &str = include_str!("splash.html");
+
+fn percent_encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The splash page as a `data:` URL, since it loads before anything is serving. An error goes in the fragment, for
+/// the page to show once it has loaded (a script run into it could arrive before it has).
+fn splash_url(error: Option<&str>) -> tauri::Url {
+    let mut url = format!("data:text/html;charset=utf-8,{}", percent_encode(SPLASH));
+    if let Some(error) = error {
+        url.push_str("#error=");
+        url.push_str(&percent_encode(error));
+    }
+    url.parse().expect("splash URL")
+}
+
+/// The dashboard: the Vite dev server under `tauri dev`, the API server (which serves the built page) otherwise.
+fn dashboard_url(app: &AppHandle, port: u16) -> tauri::Url {
+    match &app.config().build.dev_url {
+        Some(dev) if cfg!(debug_assertions) => dev.clone(),
+        _ => format!("http://127.0.0.1:{port}/").parse().expect("dashboard URL"),
+    }
+}
+
+fn create_window(app: &AppHandle, url: tauri::Url) -> tauri::Result<tauri::WebviewWindow> {
+    let win = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::External(url))
         .title("Mission Control")
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
@@ -118,7 +151,7 @@ fn create_window(app: &AppHandle) -> tauri::Result<()> {
         .theme(Some(tauri::Theme::Dark))
         .build()?;
     titlebar::paint(&win, true);
-    Ok(())
+    Ok(win)
 }
 
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -172,21 +205,53 @@ fn main() {
             setup_tray(app.handle())?;
             let handle = app.handle().clone();
             // Under `tauri dev`, `npm run dev` already runs the API. Otherwise reuse one that's running (say, from a
-            // terminal) or start our own, and open the window once it answers.
+            // terminal) or start our own. Starting one takes a few seconds, so the window opens straight away on a
+            // splash page and moves to the dashboard once the server answers.
             thread::spawn(move || {
                 let port = api_port();
-                if !cfg!(debug_assertions) && !api_up(port) {
-                    match start_server(port) {
-                        Ok(child) => *handle.state::<Server>().0.lock().unwrap() = Some(child),
-                        Err(err) => eprintln!("Couldn't start the dashboard server: {err}"),
+                let dashboard = dashboard_url(&handle, port);
+                if cfg!(debug_assertions) || api_up(port) {
+                    if let Err(err) = create_window(&handle, dashboard) {
+                        eprintln!("Couldn't open the window: {err}");
                     }
-                    let deadline = Instant::now() + Duration::from_secs(30);
-                    while !api_up(port) && Instant::now() < deadline {
+                } else {
+                    let win = create_window(&handle, splash_url(None));
+                    if let Err(err) = &win {
+                        eprintln!("Couldn't open the window: {err}");
+                    }
+                    let started = match start_server(port) {
+                        Ok(child) => {
+                            *handle.state::<Server>().0.lock().unwrap() = Some(child);
+                            true
+                        }
+                        Err(err) => {
+                            eprintln!("Couldn't start the dashboard server: {err}");
+                            false
+                        }
+                    };
+                    // Wait for it to answer, but give up early if it exits (a syntax error, a missing dependency).
+                    let exited = || {
+                        let state = handle.state::<Server>();
+                        let mut server = state.0.lock().unwrap();
+                        server.as_mut().is_none_or(|c| !matches!(c.try_wait(), Ok(None)))
+                    };
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    while started && !api_up(port) && !exited() && Instant::now() < deadline {
                         thread::sleep(Duration::from_millis(200));
                     }
-                }
-                if let Err(err) = create_window(&handle) {
-                    eprintln!("Couldn't open the window: {err}");
+                    if let Ok(win) = win {
+                        if api_up(port) {
+                            let _ = win.navigate(dashboard);
+                        } else {
+                            let log = repo_root().join("server/data/desktop-server.log");
+                            let message = if started {
+                                format!("The dashboard server didn't start. See {}", log.display())
+                            } else {
+                                "Couldn't start the dashboard server. Is node on your PATH?".to_string()
+                            };
+                            let _ = win.navigate(splash_url(Some(&message)));
+                        }
+                    }
                 }
                 hotkey::watch(handle.clone(), port);
                 approvals::watch(handle, port);

@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- Shown while the app starts its own dashboard server (see main.rs). Self-contained: it loads before anything is
+     serving, so no external files. Colours follow web/src/index.css. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mission Control</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid;
+    place-items: center;
+    background:
+      radial-gradient(60rem 40rem at 10% -10%, rgb(34 211 238 / 0.10), transparent 60%),
+      radial-gradient(50rem 40rem at 110% 10%, rgb(167 139 250 / 0.10), transparent 60%),
+      #05070d;
+    color: #dbe4f3;
+    font: 14px/1.5 system-ui, "Segoe UI", sans-serif;
+    user-select: none;
+  }
+  .card { display: flex; flex-direction: column; align-items: center; gap: 22px; text-align: center; }
+  .ring {
+    width: 56px; height: 56px; border-radius: 50%;
+    border: 2px solid rgb(148 163 184 / 0.12);
+    border-top-color: #22d3ee;
+    box-shadow: 0 0 24px -6px #22d3ee;
+    animation: spin 0.9s linear infinite;
+    display: grid; place-items: center;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #a78bfa; box-shadow: 0 0 12px #a78bfa; animation: spin 0.9s linear infinite reverse; }
+  .brand { font: 600 15px/1 ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: 0.3em; color: #fff; }
+  .brand small { display: block; margin-top: 6px; font-size: 10px; letter-spacing: 0.4em; color: #22d3ee; }
+  .status { font: 11px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: 0.08em; color: rgb(148 163 184 / 0.8); min-height: 1.4em; }
+  .error .ring { animation: none; border-color: rgb(244 114 182 / 0.5); box-shadow: none; }
+  .error .dot { animation: none; background: #f472b6; box-shadow: 0 0 12px #f472b6; }
+  .error .status { color: #f9a8d4; max-width: 34rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="ring"><div class="dot"></div></div>
+    <div class="brand">MISSION<small>CONTROL</small></div>
+    <div class="status" id="status">// starting the dashboard server<span id="dots"></span></div>
+  </div>
+  <script>
+    const started = Date.now();
+    const dots = document.getElementById("dots");
+    const tick = setInterval(() => {
+      const s = Math.floor((Date.now() - started) / 1000);
+      dots.textContent = ".".repeat((s % 3) + 1) + (s >= 5 ? ` ${s}s` : "");
+    }, 500);
+    // main.rs navigates to this page with #error=<message> if the server doesn't start. That's the same document plus
+    // a fragment, so it usually arrives as a hashchange rather than a fresh load.
+    const showError = () => {
+      if (!location.hash.startsWith("#error=")) return;
+      clearInterval(tick);
+      document.getElementById("card").classList.add("error");
+      document.getElementById("status").textContent = decodeURIComponent(location.hash.slice(7));
+    };
+    window.addEventListener("hashchange", showError);
+    showError();
+  </script>
+</body>
+</html>

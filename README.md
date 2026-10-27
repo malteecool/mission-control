@@ -29,12 +29,12 @@ npm run desktop:build    # builds the web app, the exe and an installer under de
 npm run desktop:exe      # the same without the installer: just target/release/mission-control.exe
 ```
 
-Build through these, not `cargo build --release`: without Tauri's `custom-protocol` feature, which `tauri build`
-turns on, the exe points at the dev server on 5317 and shows "connection refused".
+Both also build the web app the exe shows, so use them rather than `cargo build --release` on its own.
 
 The built app shows the same page the API serves at http://127.0.0.1:4317. If that server isn't already running it
-starts one (`node` must be on your PATH; logs go to `server/data/desktop-server.log`) and stops it on Quit. It runs
-the server from the checkout it was built in; set `DASHBOARD_ROOT` if you move it. Closing the window keeps the app
+opens straight away on a loading screen, starts one (`node` must be on your PATH; logs go to
+`server/data/desktop-server.log`) and stops it on Quit. It runs the server from the checkout it was built in; set
+`DASHBOARD_ROOT` if you move it. Closing the window keeps the app
 in the tray so task sessions keep going: click the tray icon to show or hide the window, right-click for Quit.
 Quitting stops any Claude sessions the app's server is running; their cards offer **Resume** afterwards.
 When Claude asks for approval or has a question while the window is hidden, minimised or in the background, the app
