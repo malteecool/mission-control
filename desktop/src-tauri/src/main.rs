@@ -6,6 +6,7 @@
 mod api;
 mod approvals;
 mod hotkey;
+mod titlebar;
 
 use std::fs::{self, File};
 use std::path::PathBuf;
@@ -105,7 +106,7 @@ fn toggle_window(app: &AppHandle) {
 
 fn create_window(app: &AppHandle) -> tauri::Result<()> {
     // `App` URLs resolve to the Vite dev server under `tauri dev` and to the API server (frontendDist) otherwise.
-    WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("/".into()))
+    let win = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("/".into()))
         .title("Mission Control")
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
@@ -114,7 +115,9 @@ fn create_window(app: &AppHandle) -> tauri::Result<()> {
         .initialization_script("window.__MISSION_CONTROL_DESKTOP__ = true;")
         // Tauri's native file-drop handler swallows HTML5 drag events on Windows, which breaks dragging tasks between lanes.
         .disable_drag_drop_handler()
+        .theme(Some(tauri::Theme::Dark))
         .build()?;
+    titlebar::paint(&win, true);
     Ok(())
 }
 
@@ -191,10 +194,19 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps the app in the tray; Quit in the tray menu exits.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                // Closing the window keeps the app in the tray; Quit in the tray menu exits.
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // The title text and border light up while the window is active, like the app's focus rings.
+                WindowEvent::Focused(active) => {
+                    if let Some(win) = window.app_handle().get_webview_window(WINDOW) {
+                        titlebar::paint(&win, *active);
+                    }
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())

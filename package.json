@@ -13,7 +13,8 @@
     "start": "npm run start -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "desktop": "npm run dev -w desktop",
-    "desktop:build": "npm run build -w desktop"
+    "desktop:build": "npm run build -w desktop",
+    "desktop:exe": "npm run exe -w desktop"
   },
   "devDependencies": {
     "concurrently": "^9.2.5"

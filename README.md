@@ -26,7 +26,11 @@ top of the requirements below.
 ```bash
 npm run desktop          # dev: runs `npm run dev` and opens it in the app window
 npm run desktop:build    # builds the web app, the exe and an installer under desktop/src-tauri/target/release
+npm run desktop:exe      # the same without the installer: just target/release/mission-control.exe
 ```
+
+Build through these, not `cargo build --release`: without Tauri's `custom-protocol` feature, which `tauri build`
+turns on, the exe points at the dev server on 5317 and shows "connection refused".
 
 The built app shows the same page the API serves at http://127.0.0.1:4317. If that server isn't already running it
 starts one (`node` must be on your PATH; logs go to `server/data/desktop-server.log`) and stops it on Quit. It runs

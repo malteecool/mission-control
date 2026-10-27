@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "exe": "tauri build --no-bundle",
     "icons": "node scripts/make-icon.mjs && tauri icon src-tauri/icons/source.png"
   },
   "devDependencies": {
