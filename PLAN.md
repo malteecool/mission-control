@@ -104,5 +104,5 @@ The file is only created when the first task is added. Writes are atomic (temp f
 
 ## Out of scope for MVP (later)
 
-Tauri desktop wrapper, tray + global hotkey, live file watching, multiple concurrent chats per project,
+Global hotkey for the desktop app (the Tauri wrapper and tray now exist, see `desktop/`), live file watching, multiple concurrent chats per project,
 GitHub issue sync, tagging/search across projects, tool-permission prompts answered from the UI.

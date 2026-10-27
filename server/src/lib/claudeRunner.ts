@@ -69,6 +69,7 @@ interface Proc {
   child: ChildProcess;
   stopped: boolean;
   pending: Map<string, PendingPermission>;
+  permissionMode: PermissionMode;
   emit: (ev: ChatEvent) => void;
 }
 const procs = new Map<string, Proc>();
@@ -157,7 +158,7 @@ export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: Chat
 
   const { command, shell } = claudeCommand();
   const child = spawn(command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
-  const proc: Proc = { child, stopped: false, pending: new Map(), emit };
+  const proc: Proc = { child, stopped: false, pending: new Map(), permissionMode: opts.permissionMode, emit };
   procs.set(runId, proc);
 
   let finished = false;
@@ -229,6 +230,15 @@ function handleControlRequest(proc: Proc, e: any) {
     writeLine(proc.child, {
       type: "control_response",
       response: { subtype: "error", request_id: e.request_id, error: `Unsupported control request: ${req.subtype}` },
+    });
+    return;
+  }
+  // Even in bypassPermissions mode Claude Code still asks before some calls (e.g. edits under
+  // .claude/ or .git/). Full access means no prompts, so approve those here; questions still go to the user.
+  if (proc.permissionMode === "bypassPermissions" && req.tool_name !== "AskUserQuestion") {
+    writeLine(proc.child, {
+      type: "control_response",
+      response: { subtype: "success", request_id: e.request_id, response: { behavior: "allow", updatedInput: req.input } },
     });
     return;
   }

@@ -42,6 +42,9 @@ export function sendNotification(title: string, body: string, onClick?: () => vo
 
 const active = (s: RunStatus) => s === "queued" || s === "running";
 
+/** The desktop app alerts about approvals natively, even with the window in the tray (desktop/src-tauri/src/approvals.rs). */
+const desktopAlertsApprovals = () => (window as { __MISSION_CONTROL_DESKTOP__?: boolean }).__MISSION_CONTROL_DESKTOP__ === true;
+
 export function useNotifications(projects: ProjectSummary[]) {
   const runs = useRuns();
   const seen = useRef<{ requests: Set<string>; status: Map<string, RunStatus> } | null>(null);
@@ -62,7 +65,7 @@ export function useNotifications(projects: ProjectSummary[]) {
       for (const p of r.permissions) {
         if (s.requests.has(p.requestId)) continue;
         s.requests.add(p.requestId);
-        if (!first && away())
+        if (!first && away() && !desktopAlertsApprovals())
           sendNotification(
             `${name(r.projectId)}: Claude ${p.toolName === "AskUserQuestion" ? "has a question" : "needs your approval"}`,
             r.title,

@@ -18,6 +18,27 @@ In dev, the API restarts when server code changes, but waits until no Claude ses
 working on the dashboard itself doesn't cut itself off. If a session does get cut off (you closed the app, say), its
 task card offers **Resume**, which continues the same Claude session.
 
+### Desktop app
+
+`desktop/` wraps the dashboard in a [Tauri](https://tauri.app) window with a tray icon. Needs Rust (`rustup`) on
+top of the requirements below.
+
+```bash
+npm run desktop          # dev: runs `npm run dev` and opens it in the app window
+npm run desktop:build    # builds the web app, the exe and an installer under desktop/src-tauri/target/release
+```
+
+The built app shows the same page the API serves at http://127.0.0.1:4317. If that server isn't already running it
+starts one (`node` must be on your PATH; logs go to `server/data/desktop-server.log`) and stops it on Quit. It runs
+the server from the checkout it was built in; set `DASHBOARD_ROOT` if you move it. Closing the window keeps the app
+in the tray so task sessions keep going: click the tray icon to show or hide the window, right-click for Quit.
+Quitting stops any Claude sessions the app's server is running; their cards offer **Resume** afterwards.
+When Claude asks for approval or has a question while the window is hidden, minimised or in the background, the app
+shows a Windows notification (and flashes the taskbar button if there is one); the tray tooltip counts what's waiting.
+**Ctrl+Alt+D** shows or hides the window from anywhere; change it (or turn it off) under Settings → Desktop app,
+which also says if another app already uses the combination.
+To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons -w desktop`.
+
 **Requirements:** Node 22.13+ (uses the built-in `node:sqlite`), Git, and the Claude Code CLI logged in
 (`claude`, then `/login`). Set `CLAUDE_BIN` if `claude` isn't on your PATH.
 
@@ -38,8 +59,9 @@ task card offers **Resume**, which continues the same Claude session.
   the chat show what's running; open one to watch it or answer approvals.
 - **Chat** runs `claude -p --output-format stream-json` in the project folder, using your normal Claude login.
   Pick a model and permission mode per chat. In the default "Ask" mode, Claude pauses before editing files or
-  running commands and waits for your approval — a card appears in the chat panel (or click **Review** on the task
-  card to answer without leaving the board). "Accept edits" auto-approves file edits, asking only before shell
+  running commands and waits for your approval — a card appears in the chat panel, and on any other page a popup in
+  the bottom-right corner lets you allow, deny or answer it without switching (↗ opens the chat, − hides the popup;
+  the task card's **Review** still works). "Accept edits" auto-approves file edits, asking only before shell
   commands. "Full access" auto-approves everything.
 - **Settings** (sidebar, or Ctrl+K) holds dashboard-wide defaults: the model and permission mode new chats start
   with, the model and standing instructions for task sessions, the automation settings new projects get, desktop

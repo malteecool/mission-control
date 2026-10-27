@@ -4,13 +4,16 @@
   "type": "module",
   "workspaces": [
     "server",
-    "web"
+    "web",
+    "desktop"
   ],
   "scripts": {
     "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:dev -w server\" \"npm:dev -w web\"",
     "build": "npm run build -w web",
     "start": "npm run start -w server",
-    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "desktop": "npm run dev -w desktop",
+    "desktop:build": "npm run build -w desktop"
   },
   "devDependencies": {
     "concurrently": "^9.2.5"

@@ -138,6 +138,18 @@ export interface Settings {
   newProjectPermissionMode: PermissionMode;
   /** Path to the claude executable; "" means find it on PATH. */
   claudePath: string;
+  /** Global shortcut that shows or hides the desktop app's window, e.g. "Ctrl+Alt+D"; "" turns it off. */
+  desktopHotkey: string;
+}
+
+/** What the desktop app last reported about itself. */
+export interface DesktopStatus {
+  /** Whether the desktop app has reported in the last minute. */
+  running: boolean;
+  /** The shortcut it has registered, if any. */
+  hotkey?: string;
+  /** Why it couldn't register desktopHotkey, e.g. another app already uses it. */
+  error?: string;
 }
 
 export interface ClaudeInfo {

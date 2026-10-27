@@ -1,4 +1,5 @@
 import { useState } from "react";
+import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, CheckCheck, ShieldQuestion, X } from "lucide-react";
 import type { PermissionReply, PermissionRequest } from "../lib/api.ts";
@@ -42,9 +43,12 @@ function Preview({ toolName, input }: { toolName: string; input: any }) {
 export function PermissionCard({
   request: r,
   onAnswer,
+  className = "ml-9",
 }: {
   request: PermissionRequest;
   onAnswer: (reply: PermissionReply) => void;
+  /** Placement; defaults to the indent used in the transcript. */
+  className?: string;
 }) {
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState("");
@@ -53,7 +57,7 @@ export function PermissionCard({
     <motion.div
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      className="ml-9 rounded-xl border border-amber-400/40 bg-amber-400/[0.06] shadow-[0_0_30px_-12px_rgb(251_191_36/0.6)]"
+      className={clsx(className, "rounded-xl border border-amber-400/40 bg-amber-400/[0.06] shadow-[0_0_30px_-12px_rgb(251_191_36/0.6)]")}
     >
       <div className="flex items-center gap-2 border-b border-amber-400/20 px-3.5 py-2.5">
         <ShieldQuestion size={14} className="text-amber-300" />

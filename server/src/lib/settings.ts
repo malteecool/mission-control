@@ -15,7 +15,28 @@ export const DEFAULT_SETTINGS: Settings = {
   newProjectAutoRun: true,
   newProjectPermissionMode: "acceptEdits",
   claudePath: "",
+  desktopHotkey: "Ctrl+Alt+D",
 };
+
+const MODIFIERS = ["Ctrl", "Alt", "Shift", "Super"];
+/** Keys a shortcut can end in, as the desktop app's shortcut parser names them. */
+const HOTKEY_KEY = /^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Enter|Tab|Backspace|Escape|Home|End|PageUp|PageDown|Insert|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Backquote|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Comma|Period|Slash)$/;
+
+/** Normalises "ctrl + alt + m" to "Ctrl+Alt+M", or returns undefined if it isn't modifiers plus one key. */
+export function normalizeHotkey(input: string): string | undefined {
+  const parts = input.split("+").map((p) => p.trim()).filter(Boolean);
+  const key = parts.pop();
+  if (!key || !parts.length) return undefined;
+  const mods = new Set<string>();
+  for (const p of parts) {
+    const m = MODIFIERS.find((x) => x.toLowerCase() === p.toLowerCase()) ?? (/^control$/i.test(p) ? "Ctrl" : /^(win|meta|cmd)$/i.test(p) ? "Super" : undefined);
+    if (!m) return undefined;
+    mods.add(m);
+  }
+  const k = key.length === 1 ? key.toUpperCase() : key[0].toUpperCase() + key.slice(1);
+  if (!HOTKEY_KEY.test(k)) return undefined;
+  return [...MODIFIERS.filter((m) => mods.has(m)), k].join("+");
+}
 
 db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
@@ -68,6 +89,12 @@ export function validateSettings(input: unknown): Partial<Settings> | string {
     const p = i.claudePath.trim().replace(/^"|"$/g, "");
     if (p && !fs.existsSync(p)) return `No file at ${p}`;
     out.claudePath = p;
+  }
+  if (i.desktopHotkey !== undefined) {
+    if (typeof i.desktopHotkey !== "string") return "desktopHotkey must be a string";
+    const hotkey = i.desktopHotkey.trim() ? normalizeHotkey(i.desktopHotkey) : "";
+    if (hotkey === undefined) return "Shortcut must be one or more of Ctrl, Alt, Shift, Win plus a key, e.g. Ctrl+Alt+D";
+    out.desktopHotkey = hotkey;
   }
   return out;
 }

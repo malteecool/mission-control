@@ -26,11 +26,13 @@
     {
       "id": "b55a58fc-995e-4e14-a7bd-0a196d113156",
       "title": "Wrap the app in Tauri with a tray icon",
-      "status": "todo",
+      "status": "done",
       "kind": "idea",
       "priority": 3,
       "createdAt": "2026-10-26T18:46:21.379Z",
-      "updatedAt": "2026-10-26T18:46:21.379Z"
+      "updatedAt": "2026-10-27T18:46:52.489Z",
+      "sessionId": "0ad11587-2716-4f62-866c-850eb6de36e1",
+      "doneAt": "2026-10-27T18:46:52.489Z"
     },
     {
       "id": "e6940b69-519a-4da0-95b1-d282737d48c1",
@@ -52,6 +54,94 @@
       "createdAt": "2026-10-26T20:10:15.718Z",
       "updatedAt": "2026-10-26T21:59:17.438Z",
       "doneAt": "2026-10-26T21:59:17.438Z"
+    },
+    {
+      "id": "c91a6de3-cd38-49d5-ba2b-f38460c39a5a",
+      "title": "Dashboard to manually handle update checks.",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:34:07.472Z",
+      "updatedAt": "2026-10-27T18:35:30.963Z",
+      "notes": "Should check for Claude CLI updates and prompt the user there is a new updated. Option to accept or decline should exist. On accept new the new update should be installed.\n\nOnly to be done if this makes sense at all."
+    },
+    {
+      "id": "08feeff4-5f6e-4d32-89dc-582c33697212",
+      "title": "popup/notification of approvals",
+      "status": "done",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:37:57.257Z",
+      "updatedAt": "2026-10-27T18:53:29.204Z",
+      "notes": "If agent is waiting for approval a popup should be shown where the user can accept it, even if not in the active chat window\n",
+      "sessionId": "e7ef89c5-3993-4e65-ace3-91983effcea3",
+      "doneAt": "2026-10-27T18:53:29.204Z"
+    },
+    {
+      "id": "2a3d70cb-5c4d-413d-b1e9-51db8e34745d",
+      "title": "Option to add project from git",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:42:25.566Z",
+      "updatedAt": "2026-10-27T18:43:10.862Z",
+      "notes": "Users should be able to add a project directly from git. This means we first need to clone it to a local folder."
+    },
+    {
+      "id": "a34b6e51-8e7f-4477-942c-fd498d5c499a",
+      "title": "Simple file explorer to keep track of edited files",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:43:54.779Z",
+      "updatedAt": "2026-10-27T18:43:54.779Z"
+    },
+    {
+      "id": "d165c486-a12f-4283-8a2c-e3ff69ab8d2a",
+      "title": "Full access does not give full access",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:45:49.501Z",
+      "updatedAt": "2026-10-27T18:54:25.076Z",
+      "notes": "Even if user chooses \"full access\" prompt to accept it still need manual intervention. Should be fully automatic\n",
+      "sessionId": "936ebc1f-3cd1-4b39-8253-187b7439f99c",
+      "doneAt": "2026-10-27T18:54:25.076Z"
+    },
+    {
+      "id": "4dce68ff-4ecb-47bf-bf30-53a508782f03",
+      "title": "Global hotkey to show/hide the desktop window",
+      "notes": "Tauri wrapper lives in desktop/. Use tauri-plugin-global-shortcut and reuse toggle_window in desktop/src-tauri/src/main.rs; consider making the shortcut configurable in Settings.",
+      "status": "done",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-27T18:46:44.154Z",
+      "updatedAt": "2026-10-27T19:18:26.247Z",
+      "sessionId": "56778243-1fce-4ffc-a94c-a52b8f2800ee",
+      "doneAt": "2026-10-27T19:18:26.247Z"
+    },
+    {
+      "id": "f2b34741-17ba-4a8c-b415-dc41469d9db9",
+      "title": "Desktop app: alert when Claude needs approval while the window is in the tray",
+      "notes": "The in-app approval popup (web/src/components/ApprovalPopups.tsx) only shows while the window is open, and the Tauri window has no notification plugin, so the browser Notification API in web/src/lib/notify.ts may not fire there. Add tauri-plugin-notification (or flash/show the window) when a permission request arrives and the window is hidden.",
+      "status": "done",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:53:21.955Z",
+      "updatedAt": "2026-10-27T19:02:53.872Z",
+      "sessionId": "6b7f006a-151a-4bd1-9db3-34e77e514c8b",
+      "doneAt": "2026-10-27T19:02:53.872Z"
+    },
+    {
+      "id": "1784e356-bfbd-4acc-aa57-d99f98d02f74",
+      "title": "Tauri does not allow for drag and drop in swimlanes",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-27T18:56:04.476Z",
+      "updatedAt": "2026-10-27T19:04:07.906Z",
+      "sessionId": "a805f887-4d20-43f9-9b81-8b35807df1c8",
+      "doneAt": "2026-10-27T19:04:07.906Z"
     }
   ]
 }

@@ -20,7 +20,7 @@ import { getSettings, MODEL_RE, updateSettings, validateSettings } from "./lib/s
 import { createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
 import { applyOutcome, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
 import { watchTasksStream } from "./lib/taskWatcher.ts";
-import type { ChatRequest, Overview, PermissionReply, Project, ProjectSummary, Task, TaskStatus } from "./types.ts";
+import type { ChatRequest, DesktopStatus, Overview, PermissionReply, Project, ProjectSummary, Task, TaskStatus } from "./types.ts";
 
 // Not plain PORT: dev tools often set that for the web app, which would make both servers fight over one port.
 const PORT = Number(process.env.DASHBOARD_API_PORT ?? 4317);
@@ -140,6 +140,22 @@ app.patch("/api/settings", async (c) => {
 
 // Runs `claude --version`, so it's a separate call the settings page makes when it opens.
 app.get("/api/settings/claude", (c) => c.json(claudeInfo()));
+
+// The desktop app (desktop/src-tauri/src/hotkey.rs) reports whether it could register the shortcut, every few seconds
+// while it runs, so the settings page can say so. Kept in memory: a restart just waits for the next report.
+let desktop: { hotkey?: string; error?: string; at: number } | undefined;
+
+app.get("/api/desktop", (c) => {
+  const running = !!desktop && Date.now() - desktop.at < 60_000;
+  return c.json<DesktopStatus>(running ? { running, hotkey: desktop!.hotkey, error: desktop!.error } : { running });
+});
+
+app.put("/api/desktop", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { hotkey?: unknown; error?: unknown } | null;
+  const str = (v: unknown) => (typeof v === "string" && v ? v.slice(0, 200) : undefined);
+  desktop = { hotkey: str(body?.hotkey), error: str(body?.error), at: Date.now() };
+  return c.body(null, 204);
+});
 
 // ── Tasks ───────────────────────────────────────────────────────────────────
 

@@ -29,10 +29,13 @@ export function QuestionCard({
   request: r,
   questions,
   onAnswer,
+  className = "ml-9",
 }: {
   request: PermissionRequest;
   questions: AskQuestion[];
   onAnswer: (reply: PermissionReply) => void;
+  /** Placement; defaults to the indent used in the transcript. */
+  className?: string;
 }) {
   const [choices, setChoices] = useState<Choice[]>(() => questions.map(() => ({ picked: [], other: "" })));
   const complete = choices.every((c) => answerFor(c));
@@ -59,7 +62,7 @@ export function QuestionCard({
     <motion.div
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      className="ml-9 rounded-xl border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent)_6%,transparent)] shadow-[0_0_30px_-12px_var(--accent)]"
+      className={clsx(className, "rounded-xl border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[color-mix(in_srgb,var(--accent)_6%,transparent)] shadow-[0_0_30px_-12px_var(--accent)]")}
     >
       <div className="flex items-center gap-2 border-b border-white/[0.08] px-3.5 py-2.5">
         <MessageCircleQuestion size={14} className="text-[var(--accent)]" />

@@ -10,6 +10,7 @@ import { AddProjectDialog } from "./components/AddProjectDialog.tsx";
 import { Overview } from "./components/Overview.tsx";
 import { ProjectView } from "./components/ProjectView.tsx";
 import { SettingsPage } from "./components/SettingsPage.tsx";
+import { ApprovalPopups } from "./components/ApprovalPopups.tsx";
 import { useSettings } from "./lib/settings.ts";
 import { useNotifications } from "./lib/notify.ts";
 import { Kbd } from "./components/ui.tsx";
@@ -78,6 +79,7 @@ export function App() {
         onAddProject={() => setAddOpen(true)}
       />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} />
+      <ApprovalPopups projects={projects.data ?? []} />
     </>
   );
 }

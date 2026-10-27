@@ -9,6 +9,7 @@ import type {
   SessionTranscript,
   Settings,
   ClaudeInfo,
+  DesktopStatus,
   Task,
 } from "../../../server/src/types.ts";
 
@@ -58,6 +59,7 @@ export const api = {
   settings: () => request<Settings>("GET", "/api/settings"),
   updateSettings: (body: Partial<Settings>) => request<Settings>("PATCH", "/api/settings", body),
   claudeInfo: () => request<ClaudeInfo>("GET", "/api/settings/claude"),
+  desktop: () => request<DesktopStatus>("GET", "/api/desktop"),
 
   chat: (id: number, body: ChatRequest) => request<RunInfo>("POST", `/api/projects/${id}/chat`, body),
   runTask: (id: number, taskId: string, resume = false) =>

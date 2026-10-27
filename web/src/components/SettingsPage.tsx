@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bell, Check, FolderPlus, ListChecks, MessageSquare, RefreshCw, Terminal } from "lucide-react";
+import { Bell, Check, FolderPlus, Keyboard, ListChecks, MessageSquare, RefreshCw, Terminal } from "lucide-react";
 import { api, type PermissionMode, type Settings } from "../lib/api.ts";
 import { MODELS, MODES } from "../lib/claudeOptions.ts";
 import { notificationsOn, notificationsSupported, sendNotification, setNotifications } from "../lib/notify.ts";
@@ -92,6 +92,8 @@ export function SettingsPage() {
 
       <NotificationSection />
 
+      <DesktopSection hotkey={s.desktopHotkey} onSave={(desktopHotkey) => set({ desktopHotkey })} />
+
       <ClaudeSection path={s.claudePath} onSave={(claudePath) => set({ claudePath })} />
     </div>
   );
@@ -136,6 +138,74 @@ function NotificationSection() {
       )}
       {note && <p className="text-xs text-amber-300">{note}</p>}
     </Section>
+  );
+}
+
+function DesktopSection({ hotkey, onSave }: { hotkey: string; onSave: (h: string) => void }) {
+  const status = useQuery({ queryKey: ["desktop"], queryFn: api.desktop, refetchInterval: 3000 });
+  const d = status.data;
+  return (
+    <Section icon={<Keyboard size={15} />} title="Desktop app" hint="A shortcut that shows or hides the window from anywhere, even when it's in the tray.">
+      <Row label="Show / hide shortcut">
+        <ShortcutInput value={hotkey} onChange={onSave} />
+        {hotkey && (
+          <Button size="sm" onClick={() => onSave("")}>
+            Turn off
+          </Button>
+        )}
+      </Row>
+      {d &&
+        (!d.running ? (
+          <p className="text-xs text-slate-500">The desktop app isn't running. The shortcut works while it is.</p>
+        ) : d.error ? (
+          <p className="text-xs text-amber-300">{d.error}</p>
+        ) : d.hotkey ? (
+          <p className="flex items-center gap-1 text-xs text-emerald-400">
+            <Check size={12} /> {d.hotkey} is active in the desktop app.
+          </p>
+        ) : null)}
+    </Section>
+  );
+}
+
+const MODIFIER_CODES = /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/;
+
+/** The shortcut's key from a KeyboardEvent.code, in the names the desktop app's parser takes ("KeyM" is "M"). */
+function shortcutKey(code: string) {
+  return /^Key([A-Z])$/.exec(code)?.[1] ?? /^Digit(\d)$/.exec(code)?.[1] ?? code;
+}
+
+/** Click, then press the combination. Escape cancels. */
+function ShortcutInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [recording, setRecording] = useState(false);
+  const [held, setHeld] = useState("");
+  return (
+    <button
+      type="button"
+      onClick={(e) => (recording ? e.currentTarget.blur() : setRecording(true))}
+      onBlur={() => {
+        setRecording(false);
+        setHeld("");
+      }}
+      onKeyDown={(e) => {
+        if (!recording) return;
+        e.preventDefault();
+        if (e.key === "Escape") return e.currentTarget.blur();
+        const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
+        if (MODIFIER_CODES.test(e.key) || MODIFIER_CODES.test(e.code)) return setHeld(mods.join("+") + "+…");
+        if (!mods.length) return setHeld("Add Ctrl, Alt, Shift or Win");
+        onChange([...mods, shortcutKey(e.code)].join("+"));
+        e.currentTarget.blur();
+      }}
+      onKeyUp={(e) => recording && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && setHeld("")}
+      className={clsx(
+        field,
+        "min-w-44 font-mono text-xs",
+        recording ? "border-[var(--accent)] text-[var(--accent)]" : !value && "text-slate-500",
+      )}
+    >
+      {recording ? held || "Press a shortcut…" : value || "Off"}
+    </button>
   );
 }
 
