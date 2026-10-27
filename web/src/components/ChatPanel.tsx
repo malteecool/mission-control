@@ -5,7 +5,7 @@ import { chat, useChat } from "../lib/chatStore.ts";
 import { Button, Empty, ErrorNote, Kbd } from "./ui.tsx";
 import clsx from "clsx";
 import { activeRuns, useRuns } from "../lib/runs.ts";
-import { MODELS, MODES } from "../lib/claudeOptions.ts";
+import { MODEL_GROUPS, MODELS, MODES } from "../lib/claudeOptions.ts";
 import { Transcript } from "./Transcript.tsx";
 import { PermissionCard } from "./PermissionCard.tsx";
 import { QuestionCard, askQuestions } from "./QuestionCard.tsx";
@@ -72,11 +72,20 @@ export function ChatPanel({ projectId }: { projectId: number }) {
           title="Model"
         >
           {/* A custom model id from the settings page isn't in the list; show it anyway. */}
-          {[...MODELS, ...(MODELS.some((m) => m.value === s.model) ? [] : [{ value: s.model, label: s.model }])].map((m) => (
-            <option key={m.value} value={m.value} className="bg-slate-900">
-              {m.label}
-            </option>
+          {MODEL_GROUPS.map((g) => (
+            <optgroup key={g.label} label={g.label} className="bg-slate-900">
+              {g.models.map((m) => (
+                <option key={m.value} value={m.value} className="bg-slate-900">
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
+          {!MODELS.some((m) => m.value === s.model) && (
+            <option value={s.model} className="bg-slate-900">
+              {s.model}
+            </option>
+          )}
         </select>
         <select
           value={s.permissionMode}

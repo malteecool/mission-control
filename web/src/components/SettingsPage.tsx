@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Bell, Check, FolderPlus, Keyboard, ListChecks, MessageSquare, RefreshCw, Terminal } from "lucide-react";
 import { api, type PermissionMode, type Settings } from "../lib/api.ts";
-import { MODELS, MODES } from "../lib/claudeOptions.ts";
+import { MODEL_GROUPS, MODELS, MODES } from "../lib/claudeOptions.ts";
 import { notificationsOn, notificationsSupported, sendNotification, setNotifications } from "../lib/notify.ts";
 import { useSettings } from "../lib/settings.ts";
 import { Button, ErrorNote, Panel } from "./ui.tsx";
@@ -329,10 +329,14 @@ function ModelPicker({ value, onChange, emptyLabel }: { value: string; onChange:
         }}
         className={field}
       >
-        {MODELS.map((m) => (
-          <option key={m.value} value={m.value} className="bg-slate-900">
-            {m.value === "" && emptyLabel ? emptyLabel : m.label}
-          </option>
+        {MODEL_GROUPS.map((g) => (
+          <optgroup key={g.label} label={g.label} className="bg-slate-900">
+            {g.models.map((m) => (
+              <option key={m.value} value={m.value} className="bg-slate-900">
+                {m.value === "" && emptyLabel ? emptyLabel : m.label}
+              </option>
+            ))}
+          </optgroup>
         ))}
         <option value={CUSTOM} className="bg-slate-900">
           Other model id…
