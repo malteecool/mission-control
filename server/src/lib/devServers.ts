@@ -305,9 +305,13 @@ export async function stopDevServer(projectId: number): Promise<boolean> {
   if (s.child) killTree(s.child.pid);
   else if (process.platform !== "win32") killGroup(s.adopted![0]);
   else {
-    // Look again rather than trusting the PIDs from the restart: one may have exited and been reused since.
-    const table = s.info.pid && s.info.startedAt ? (await windowsProcesses())?.table : undefined;
-    const pids = table ? leftoverTrees(table, s.info.pid!, Date.parse(s.info.startedAt!), survivors(s)) : s.adopted;
+    // Look again rather than trusting the PIDs from the restart: one may have exited and been reused since. What to
+    // look for is read first, so a dev server started while PowerShell runs isn't the one targeted.
+    const { pid, startedAt } = s.info;
+    const adopted = s.adopted;
+    const known = survivors(s);
+    const table = pid && startedAt ? (await windowsProcesses())?.table : undefined;
+    const pids = table ? leftoverTrees(table, pid!, Date.parse(startedAt!), known) : adopted;
     for (const pid of pids ?? []) killTree(pid);
   }
   return true;
@@ -408,7 +412,11 @@ interface ProcessEntry {
   started: number;
 }
 
-/** Runs a command without waiting on it, resolving to its output, or undefined if it failed or timed out. */
+/**
+ * Runs a command without waiting on it, resolving to its output, or undefined if it couldn't be started or was killed
+ * (timed out). A non-zero exit still gives the output: one bad line (say, a process PowerShell can't read) shouldn't
+ * throw away all the others.
+ */
 function capture(command: string, args: string[], timeout: number): Promise<string | undefined> {
   return new Promise((resolve) => {
     let child: ChildProcess;
@@ -420,7 +428,7 @@ function capture(command: string, args: string[], timeout: number): Promise<stri
     let out = "";
     child.stdout!.setEncoding("utf8").on("data", (d: string) => (out += d));
     child.once("error", () => resolve(undefined));
-    child.once("close", (code) => resolve(code === 0 ? out : undefined));
+    child.once("close", (code) => resolve(code === null ? undefined : out));
   });
 }
 
@@ -432,7 +440,8 @@ function capture(command: string, args: string[], timeout: number): Promise<stri
 async function windowsProcesses(withBoot = false): Promise<{ table: ProcessEntry[]; booted?: number } | undefined> {
   const script = [
     ...(withBoot ? [`"boot $((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o'))"`] : []),
-    `Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`,
+    // Some processes (e.g. System Idle Process) can have no start time; calling a method on that would be an error.
+    `Get-CimInstance Win32_Process | Where-Object CreationDate | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`,
   ].join("; ");
   const out = await capture("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 20_000);
   if (out === undefined) return undefined;
