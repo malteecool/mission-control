@@ -688,6 +688,9 @@ app.get("/api/health", async (c) => {
   return c.json(health);
 });
 
+// An API path with no route is a JSON 404, not the web app's index.html below (which the client can't parse).
+app.all("/api/*", (c) => c.json({ error: `No API route for ${c.req.method} ${c.req.path}` }, 404));
+
 // ── Static web build (production) ───────────────────────────────────────────
 
 const webDist = path.resolve(import.meta.dirname, "../../web/dist");

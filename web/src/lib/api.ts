@@ -38,7 +38,11 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new ApiError(err.error ?? `Request failed (${res.status})`);
   }
-  return res.status === 204 ? (undefined as T) : res.json();
+  if (res.status === 204) return undefined as T;
+  // Anything but JSON here means the request didn't reach the route it meant to, e.g. a server that predates it.
+  if (!res.headers.get("content-type")?.includes("application/json"))
+    throw new ApiError(`Unexpected response from ${new URL(url, location.href).pathname}. Is the dashboard server up to date?`);
+  return res.json();
 }
 
 export const api = {
