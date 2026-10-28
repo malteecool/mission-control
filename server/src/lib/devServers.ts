@@ -1,16 +1,32 @@
 // Runs a project's dev command (`npm run dev` and friends) from its page, keeping recent output so the Dev tab can
-// show logs and attach at any time. One dev server per project; it lives as long as the dashboard server does.
+// show logs and attach at any time. One dev server per project. Its output goes to log files in data/ rather than
+// pipes, so it outlives a dashboard restart: the next start reattaches to it (tails the logs, watches the process).
 import fs from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { dataDir } from "../db.ts";
 import type { DevLogLine, DevServerInfo, DevServerStatus } from "../types.ts";
 
 type Listener = (line: DevLogLine | null) => void; // null: state changed (started, URL found, exited)
 
+/** Follows one of a dev server's log files from `offset` on. */
+interface Tail {
+  file: string;
+  offset: number;
+  reader: ReturnType<typeof lineReader>;
+}
+
 interface DevServer {
   info: DevServerStatus;
+  /** Set when this dashboard process started it. */
   child?: ChildProcess;
+  /**
+   * Set when it was reattached after a restart: the PIDs still running from it (Windows) or its process group ID (Unix),
+   * watched by polling since there's no child process to hear from.
+   */
+  adopted?: number[];
+  tails?: Tail[];
   logs: DevLogLine[];
   nextSeq: number;
   listeners: Set<Listener>;
@@ -19,6 +35,9 @@ interface DevServer {
 
 const servers = new Map<number, DevServer>();
 const MAX_LINES = 2000;
+const logDir = path.join(dataDir, "dev-servers");
+const MAX_LOG_BYTES = 5 * 1024 * 1024; // A log file is emptied once it grows past this and has been read.
+const BACKLOG_BYTES = 256 * 1024; // How much of each log file to show again when reattaching.
 // Scripts offered first, in this order; any other script can be picked too.
 const PREFERRED = ["dev", "start", "serve", "preview", "watch"];
 
@@ -87,17 +106,95 @@ function changed(s: DevServer) {
 /** Splits a stream into lines, keeping a partial last line until the rest arrives. */
 function lineReader(onLine: (text: string) => void) {
   let rest = "";
+  const decoder = new StringDecoder("utf8"); // Keeps a character split across reads whole.
   return {
     write(chunk: Buffer) {
-      const parts = (rest + chunk.toString("utf8")).split(/\r?\n|\r(?!\n)/);
+      const parts = (rest + decoder.write(chunk)).split(/\r?\n|\r(?!\n)/);
       rest = parts.pop() ?? "";
       for (const p of parts) onLine(p.replace(ANSI, ""));
     },
     flush() {
+      rest += decoder.end();
       if (rest) onLine(rest.replace(ANSI, ""));
       rest = "";
     },
   };
+}
+
+function logFile(projectId: number, stream: "stdout" | "stderr") {
+  return path.join(logDir, `${projectId}.${stream === "stdout" ? "out" : "err"}.log`);
+}
+
+function newTail(s: DevServer, stream: "stdout" | "stderr", offset = 0): Tail {
+  return { file: logFile(s.info.projectId, stream), offset, reader: lineReader((t) => push(s, stream, t)) };
+}
+
+/** Passes on whatever was written to the log file since the last read. */
+function readTail(t: Tail) {
+  let fd: number;
+  try {
+    fd = fs.openSync(t.file, "r");
+  } catch {
+    return;
+  }
+  let size = 0;
+  try {
+    size = fs.fstatSync(fd).size;
+    if (size < t.offset) t.offset = 0; // Emptied.
+    const buf = Buffer.alloc(64 * 1024);
+    while (t.offset < size) {
+      const n = fs.readSync(fd, buf, 0, Math.min(buf.length, size - t.offset), t.offset);
+      if (!n) break;
+      t.offset += n;
+      t.reader.write(buf.subarray(0, n));
+    }
+  } catch {
+    // Try again on the next poll.
+  } finally {
+    fs.closeSync(fd);
+  }
+  // The dev server writes in append mode, so after emptying the file it carries on from the start.
+  if (t.offset > MAX_LOG_BYTES && t.offset >= size) {
+    try {
+      fs.truncateSync(t.file, 0);
+      t.offset = 0;
+    } catch {
+      // Still in use in a way that forbids it; try later.
+    }
+  }
+}
+
+/** Shows the last part of a log file again (after a restart) and returns where it ends, to follow on from there. */
+function readBacklog(s: DevServer, stream: "stdout" | "stderr"): number {
+  const file = logFile(s.info.projectId, stream);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, "r");
+  } catch {
+    return 0;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - BACKLOG_BYTES);
+    const buf = Buffer.alloc(size - start);
+    const n = fs.readSync(fd, buf, 0, buf.length, start);
+    let text = buf.subarray(0, n).toString("utf8");
+    if (start > 0) text = text.slice(text.indexOf("\n") + 1); // Skip the partial first line.
+    const reader = lineReader((t) => push(s, stream, t));
+    reader.write(Buffer.from(text));
+    reader.flush();
+    return start + n;
+  } catch {
+    return 0;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Empties a log file and opens it for a new dev server to write to. */
+function openLog(file: string): number {
+  fs.writeFileSync(file, "");
+  return fs.openSync(file, "a");
 }
 
 export function startDevServer(projectId: number, dir: string, script: string): DevServerStatus {
@@ -118,27 +215,38 @@ export function startDevServer(projectId: number, dir: string, script: string): 
 
   // The script name was checked above, so it's safe to pass through the shell (needed for npm.cmd).
   // Detached on Unix so the whole process group can be stopped; BROWSER=none keeps tools from opening a tab themselves.
-  const child = spawn(command, {
-    cwd: dir,
-    shell: true,
-    detached: process.platform !== "win32",
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, BROWSER: "none", FORCE_COLOR: "0", DASHBOARD_API_PORT: undefined },
-  });
+  // Output goes straight to files rather than pipes, so the dev server keeps running if the dashboard goes away.
+  fs.mkdirSync(logDir, { recursive: true });
+  const fds: number[] = [];
+  let child: ChildProcess;
+  try {
+    fds.push(openLog(logFile(projectId, "stdout")), openLog(logFile(projectId, "stderr")));
+    child = spawn(command, {
+      cwd: dir,
+      shell: true,
+      detached: process.platform !== "win32",
+      windowsHide: true,
+      stdio: ["ignore", fds[0], fds[1]],
+      env: { ...process.env, BROWSER: "none", FORCE_COLOR: "0", DASHBOARD_API_PORT: undefined },
+    });
+  } catch (e) {
+    s.info = { ...s.info, status: "crashed", finishedAt: new Date().toISOString() };
+    push(s, "system", `Couldn't start: ${(e as Error).message}`);
+    changed(s);
+    throw e;
+  } finally {
+    for (const fd of fds) fs.closeSync(fd); // The child has its own copies.
+  }
   s.child = child;
+  s.adopted = undefined;
+  s.tails = [newTail(s, "stdout"), newTail(s, "stderr")];
   s.info.pid = child.pid;
   saveRunning();
-  const out = lineReader((t) => push(s, "stdout", t));
-  const err = lineReader((t) => push(s, "stderr", t));
-  child.stdout?.on("data", (c: Buffer) => out.write(c));
-  child.stderr?.on("data", (c: Buffer) => err.write(c));
   child.once("error", (e) => push(s, "system", `Couldn't start: ${e.message}`));
   child.once("close", (code, signal) => {
-    out.flush();
-    err.flush();
     if (s.child !== child) return;
     s.child = undefined;
+    finishTails(s);
     saveRunning();
     s.info = {
       ...s.info,
@@ -182,22 +290,62 @@ function killGroup(pgid: number) {
 
 export function stopDevServer(projectId: number): boolean {
   const s = servers.get(projectId);
-  if (!s?.child) return false;
+  if (!s?.child && !s?.adopted) return false;
   s.stopRequested = true;
   push(s, "system", "Stopping…");
-  killTree(s.child.pid);
+  if (s.child) killTree(s.child.pid);
+  else if (process.platform !== "win32") killGroup(s.adopted![0]);
+  else {
+    // Look again rather than trusting the PIDs from the restart: one may have exited and been reused since.
+    const pids = s.info.pid && s.info.startedAt ? leftoverTree(processTable(), s.info.pid, Date.parse(s.info.startedAt)) : s.adopted!;
+    for (const pid of pids) killTree(pid);
+  }
   return true;
 }
 
-// Don't leave dev servers holding their ports after the dashboard goes away (claudeRunner turns signals into exit).
-process.on("exit", () => {
-  for (const s of servers.values()) if (s.child) killTree(s.child.pid);
-  saveRunning([]);
-});
+/** Reads the remaining output of a dev server that has exited and stops following its logs. */
+function finishTails(s: DevServer) {
+  for (const t of s.tails ?? []) {
+    readTail(t);
+    t.reader.flush();
+  }
+  s.tails = undefined;
+}
 
-// The exit handler doesn't run when the server is killed outright (TerminateProcess on Windows, which is how
-// scripts/dev.mjs restarts it there, or SIGKILL), so the running dev servers are also written down and any left
-// over are stopped on the next start. They can't be re-adopted: their output went to pipes that died with us.
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM"; // Exists, just not ours to signal.
+  }
+}
+
+/** Notices when a reattached dev server exits, since there's no child process to report it. */
+function checkAdopted(s: DevServer) {
+  if (!s.adopted) return;
+  // Windows: drop PIDs as they exit, so one reused later doesn't count. Unix: the group lives while any member does.
+  s.adopted = process.platform === "win32" ? s.adopted.filter(isAlive) : s.adopted.filter((g) => isAlive(-g));
+  if (s.adopted.length) return;
+  s.adopted = undefined;
+  finishTails(s);
+  saveRunning();
+  s.info = { ...s.info, status: "stopped", finishedAt: new Date().toISOString(), pid: undefined };
+  push(s, "system", s.stopRequested ? "Stopped." : "Exited (exit code unknown: it was started before the dashboard restarted).");
+  changed(s);
+}
+
+// Follow the log files of every running dev server, and watch the reattached ones for exiting. Unref'd so these
+// timers never keep the dashboard alive by themselves.
+setInterval(() => {
+  for (const s of servers.values()) for (const t of s.tails ?? []) readTail(t);
+}, 250).unref();
+setInterval(() => {
+  for (const s of servers.values()) checkAdopted(s);
+}, 2000).unref();
+
+// Dev servers deliberately aren't stopped when the dashboard exits: a restart (scripts/dev.mjs, or after an update)
+// shouldn't take down the user's dev server. They're written down instead, and the next start reattaches to them.
 const runningFile = path.join(dataDir, "dev-servers.json");
 
 interface RunningRecord {
@@ -206,11 +354,13 @@ interface RunningRecord {
   startedAt: string;
   command?: string;
   script?: string;
+  /** Its output goes to log files (so it can be reattached). Older records are of dev servers whose output went to pipes. */
+  logged?: boolean;
 }
 
 function saveRunning(records = [...servers.values()].flatMap((s): RunningRecord[] =>
-  s.child?.pid && s.info.startedAt
-    ? [{ projectId: s.info.projectId, pid: s.child.pid, startedAt: s.info.startedAt, command: s.info.command, script: s.info.script }]
+  (s.child || s.adopted) && s.info.pid && s.info.startedAt
+    ? [{ projectId: s.info.projectId, pid: s.info.pid, startedAt: s.info.startedAt, command: s.info.command, script: s.info.script, logged: true }]
     : [],
 )) {
   try {
@@ -328,7 +478,28 @@ function leftoverGroup(table: GroupEntry[], leader: number, startedAt: number): 
   return table.some((p) => p.pgid === leader && p.started >= startedAt - SLACK && p.started <= startedAt + CHILD_WINDOW);
 }
 
-function stopLeftovers() {
+/** A dev server written down by the previous dashboard process, reattached if it's still running. */
+function leftoverServer(r: RunningRecord, live: number[] | undefined): DevServer {
+  const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
+  s.info = { projectId: r.projectId, status: live ? "running" : "stopped", script: r.script, command: r.command, startedAt: r.startedAt };
+  servers.set(r.projectId, s);
+  push(s, "system", `$ ${r.command ?? "(dev server)"}`);
+  // Separate files, so the two streams' backlogs can't be interleaved; everything after this point arrives in order.
+  const outEnd = readBacklog(s, "stdout");
+  const errEnd = readBacklog(s, "stderr");
+  if (live) {
+    s.info.pid = r.pid;
+    s.adopted = live;
+    s.tails = [newTail(s, "stdout", outEnd), newTail(s, "stderr", errEnd)];
+    push(s, "system", `Reattached after the dashboard restarted (pid ${r.pid}).`);
+  } else {
+    s.info.finishedAt = new Date().toISOString();
+    push(s, "system", "Exited while the dashboard was down.");
+  }
+  return s;
+}
+
+function adoptLeftovers() {
   let records: RunningRecord[];
   try {
     records = JSON.parse(fs.readFileSync(runningFile, "utf8")) as RunningRecord[];
@@ -346,25 +517,26 @@ function stopLeftovers() {
   if (!groups) return; // Keep the records so the next start can try again.
   for (const r of records) {
     const startedAt = Date.parse(r.startedAt);
-    if (windows) {
-      // Kill each surviving branch; its root may be gone.
-      const pids = leftoverTree(table, r.pid, startedAt);
-      if (!pids.length) continue;
-      for (const pid of pids) killTree(pid);
-    } else {
-      // The dev server is its own process group, which outlives its leader.
-      if (!leftoverGroup(groups, r.pid, startedAt)) continue;
-      killGroup(r.pid);
+    // Windows: each surviving branch, whose root may be gone. Unix: its own process group, which outlives its leader.
+    const pids = windows ? leftoverTree(table, r.pid, startedAt) : leftoverGroup(groups, r.pid, startedAt) ? [r.pid] : [];
+    if (r.logged) {
+      leftoverServer(r, pids.length ? pids : undefined);
+      continue;
     }
+    // From before dev servers logged to files: its output went to pipes that died with the old process, so it
+    // can't be followed. Stop it instead.
+    if (!pids.length) continue;
+    if (windows) for (const pid of pids) killTree(pid);
+    else killGroup(r.pid);
     const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
     s.info = { projectId: r.projectId, status: "stopped", script: r.script, command: r.command, startedAt: r.startedAt, finishedAt: new Date().toISOString() };
     servers.set(r.projectId, s);
     push(s, "system", `Stopped ${r.command ?? "the dev server"} (pid ${r.pid}), left running when the dashboard last shut down.`);
   }
-  saveRunning([]);
+  saveRunning();
 }
 
-stopLeftovers();
+adoptLeftovers();
 
 /**
  * NDJSON stream for the Dev tab: `{"type":"status",...}` first and whenever it changes, then a `{"type":"log",...}`
