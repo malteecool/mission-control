@@ -40,6 +40,17 @@ import {
 } from "./lib/review.ts";
 import { shelveWorktree } from "./lib/worktrees.ts";
 import { watchTasksStream } from "./lib/taskWatcher.ts";
+import {
+  createSchedule,
+  deleteProjectSchedules,
+  deleteSchedule,
+  fireSchedule,
+  getSchedule,
+  listSchedules,
+  startScheduler,
+  updateSchedule,
+  validateScheduleInput,
+} from "./lib/schedules.ts";
 import { usageReport } from "./lib/usage.ts";
 import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopDevServer } from "./lib/devServers.ts";
 import type {
@@ -158,6 +169,7 @@ app.patch("/api/projects/:id", async (c) => {
 app.delete("/api/projects/:id", (c) => {
   const p = projectOr404(c.req.param("id"));
   deleteProject(p.id);
+  deleteProjectSchedules(p.id);
   return c.body(null, 204);
 });
 
@@ -348,6 +360,46 @@ app.post("/api/projects/:id/tasks/:taskId/plan", async (c) => {
   task = (await updateTask(p.path, task.id, { status: "doing", ...(body.approve ? { planApproved: true } : {}) }))!;
   const planReply = body.approve ? { approve: true as const, note: text(body.note) } : { approve: false as const, feedback: feedback! };
   return c.json(await startTaskRun(p, task, { planReply }), 201);
+});
+
+// ── Recurring tasks ─────────────────────────────────────────────────────────
+
+app.get("/api/projects/:id/schedules", (c) => c.json(listSchedules(projectOr404(c.req.param("id")).id)));
+
+app.post("/api/projects/:id/schedules", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  const input = validateScheduleInput(await c.req.json(), true);
+  if (typeof input === "string") throw new HttpError(400, input);
+  return c.json(createSchedule(p.id, input), 201);
+});
+
+function scheduleOr404(projectId: string, id: string) {
+  const p = projectOr404(projectId);
+  const s = getSchedule(id);
+  if (!s || s.projectId !== p.id) throw new HttpError(404, "Schedule not found");
+  return { p, s };
+}
+
+app.patch("/api/projects/:id/schedules/:sid", async (c) => {
+  const { s } = scheduleOr404(c.req.param("id"), c.req.param("sid"));
+  const input = validateScheduleInput(await c.req.json(), false);
+  if (typeof input === "string") throw new HttpError(400, input);
+  return c.json(updateSchedule(s.id, input));
+});
+
+app.delete("/api/projects/:id/schedules/:sid", (c) => {
+  const { s } = scheduleOr404(c.req.param("id"), c.req.param("sid"));
+  deleteSchedule(s.id);
+  return c.body(null, 204);
+});
+
+// Puts the schedule's task on the board now (and starts it, if the schedule does), without waiting for its time.
+app.post("/api/projects/:id/schedules/:sid/run", async (c) => {
+  const { p, s } = scheduleOr404(c.req.param("id"), c.req.param("sid"));
+  if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  const task = await fireSchedule(s.id, true);
+  if (!task) throw new HttpError(409, getSchedule(s.id)?.lastNote ?? "Couldn't run the schedule");
+  return c.json(task, 201);
 });
 
 // ── Reviewing what a task changed ───────────────────────────────────────────
@@ -572,4 +624,5 @@ if (fs.existsSync(webDist)) {
 
 serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, (info) => {
   console.log(`Project dashboard API on http://localhost:${info.port}`);
+  startScheduler();
 });

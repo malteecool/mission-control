@@ -33,6 +33,8 @@ export interface Task {
   planApproved?: boolean;
   /** The task's own git worktree and branch (projects that run tasks in parallel). Cleared once merged or discarded. */
   worktree?: TaskWorktree;
+  /** The recurring schedule that put this task on the board. */
+  scheduleId?: string;
 }
 
 /** A checkout of the project on its own branch, under <project>/.claude/worktrees/, where one task's sessions work. */
@@ -94,6 +96,42 @@ export interface ChangeSummary {
   files: number;
   added: number;
   removed: number;
+}
+
+/**
+ * When a schedule comes round, in the server's local time. "hourly" runs every `every` hours (counted from midnight)
+ * at `time`'s minute; "weekly" on `days` (0 = Sunday); "monthly" on `monthDay`, or the month's last day if it's shorter.
+ */
+export interface ScheduleRule {
+  freq: "hourly" | "daily" | "weekdays" | "weekly" | "monthly";
+  /** "HH:MM", 24-hour. */
+  time: string;
+  days?: number[];
+  monthDay?: number;
+  every?: number;
+}
+
+/** A recurring task: each time it comes round, a fresh copy lands on the project's board (and starts, with autoStart). */
+export interface Schedule {
+  id: string;
+  projectId: number;
+  title: string;
+  notes?: string;
+  kind: TaskKind;
+  priority: TaskPriority;
+  planFirst?: boolean;
+  rule: ScheduleRule;
+  enabled: boolean;
+  /** Start a Claude session on the task right away; otherwise it waits in To do. */
+  autoStart: boolean;
+  createdAt: string;
+  /** Missing while disabled. */
+  nextRunAt?: string;
+  lastRunAt?: string;
+  /** The task the last run put on the board. */
+  lastTaskId?: string;
+  /** What happened last time when it wasn't a plain run, e.g. it was skipped. */
+  lastNote?: string;
 }
 
 export interface TaskFile {

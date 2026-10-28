@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Square, StepForward, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Repeat, Square, StepForward, Trash2 } from "lucide-react";
 import { api, type ChangeSummary, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus, type UsageTotals } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
@@ -11,6 +11,7 @@ import { useTaskWatch } from "../lib/taskWatch.ts";
 import { AgentStrip, Strip, StripButton } from "./AgentStrip.tsx";
 import { ReviewDialog } from "./ReviewDialog.tsx";
 import { PlanReview } from "./PlanReview.tsx";
+import { ScheduleDialog } from "./ScheduleDialog.tsx";
 import { KIND_STYLE, formatUsd, timeAgo } from "../lib/util.ts";
 import { Empty, ErrorNote, IconButton, Kbd } from "./ui.tsx";
 import { attempt, menu } from "./ContextMenu.tsx";
@@ -63,6 +64,9 @@ export function TaskBoard({ projectId }: { projectId: number }) {
   });
   const changesByTask = useMemo(() => new Map(changes.data?.map((c) => [c.taskId, c])), [changes.data]);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const schedules = useQuery({ queryKey: ["schedules", projectId], queryFn: () => api.schedules(projectId) });
+  const activeSchedules = schedules.data?.filter((s) => s.enabled).length ?? 0;
   const autoRun = project.data?.autoRun ?? true;
   const [draft, setDraft] = useState("");
   const [filter, setFilter] = useState<TaskKind | "all">("all");
@@ -172,6 +176,14 @@ export function TaskBoard({ projectId }: { projectId: number }) {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setSchedulesOpen(true)}
+          className="flex h-10 items-center gap-1.5 rounded-xl border border-white/10 bg-black/20 px-3 text-xs text-slate-300 transition hover:text-white"
+          title="Tasks that land on the board and run themselves on a schedule"
+        >
+          <Repeat size={13} className="text-[var(--accent)]" /> Recurring
+          {activeSchedules > 0 && <span className="rounded-full bg-white/10 px-1.5 font-mono text-[10px]">{activeSchedules}</span>}
+        </button>
       </div>
 
       {(add.error || update.error || remove.error || startRun.error || replyToPlan.error || tasks.error) && (
@@ -247,6 +259,7 @@ export function TaskBoard({ projectId }: { projectId: number }) {
           ))}
         </div>
       )}
+      <ScheduleDialog projectId={projectId} open={schedulesOpen} onClose={() => setSchedulesOpen(false)} />
       <ReviewDialog
         projectId={projectId}
         task={tasks.data?.find((t) => t.id === reviewing) ?? null}
@@ -438,6 +451,11 @@ function TaskCard({
             >
               PLAN
             </button>
+          )}
+          {t.scheduleId && (
+            <span className="text-slate-500" title="Added by a recurring task">
+              <Repeat size={10} />
+            </span>
           )}
           {t.worktree && (
             <span className="text-slate-500" title={`Works in its own worktree on ${t.worktree.branch}`}>

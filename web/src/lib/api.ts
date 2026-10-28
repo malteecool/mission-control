@@ -4,6 +4,7 @@ import type {
   DiscoveredProject,
   RunInfo,
   Overview,
+  Schedule,
   PermissionReply,
   ProjectHealth,
   ProjectSummary,
@@ -58,6 +59,13 @@ export const api = {
   updateTask: (id: number, taskId: string, body: Partial<Task>) =>
     request<Task>("PATCH", `/api/projects/${id}/tasks/${taskId}`, body),
   deleteTask: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}`),
+
+  schedules: (id: number) => request<Schedule[]>("GET", `/api/projects/${id}/schedules`),
+  addSchedule: (id: number, body: Partial<Schedule>) => request<Schedule>("POST", `/api/projects/${id}/schedules`, body),
+  updateSchedule: (id: number, sid: string, body: Partial<Schedule>) =>
+    request<Schedule>("PATCH", `/api/projects/${id}/schedules/${sid}`, body),
+  deleteSchedule: (id: number, sid: string) => request<void>("DELETE", `/api/projects/${id}/schedules/${sid}`),
+  runSchedule: (id: number, sid: string) => request<Task>("POST", `/api/projects/${id}/schedules/${sid}/run`),
 
   changeSummaries: (id: number) => request<ChangeSummary[]>("GET", `/api/projects/${id}/changes`),
   taskChanges: (id: number, taskId: string) => request<TaskChanges>("GET", `/api/projects/${id}/tasks/${taskId}/changes`),

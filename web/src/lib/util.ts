@@ -1,4 +1,4 @@
-import type { TaskKind } from "./api.ts";
+import type { ScheduleRule, TaskKind } from "./api.ts";
 
 export function timeAgo(iso?: string): string {
   if (!iso) return "—";
@@ -13,6 +13,40 @@ export function timeAgo(iso?: string): string {
   const mo = Math.round(d / 30);
   if (mo < 12) return `${mo}mo ago`;
   return `${Math.round(mo / 12)}y ago`;
+}
+
+/** "in 5m", "in 3h", "in 2d"; "now" once it's due. */
+export function timeUntil(iso?: string): string {
+  if (!iso) return "—";
+  const m = Math.round((new Date(iso).getTime() - Date.now()) / 60_000);
+  if (m < 1) return "now";
+  if (m < 60) return `in ${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `in ${h}h`;
+  return `in ${Math.round(h / 24)}d`;
+}
+
+export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th"}`;
+
+/** "Every Monday and Thursday at 09:00", "Every 6 hours at :30". */
+export function describeRule(r: ScheduleRule): string {
+  switch (r.freq) {
+    case "hourly":
+      return r.every && r.every > 1 ? `Every ${r.every} hours at :${r.time.slice(3)}` : `Every hour at :${r.time.slice(3)}`;
+    case "daily":
+      return `Every day at ${r.time}`;
+    case "weekdays":
+      return `Weekdays at ${r.time}`;
+    case "weekly": {
+      const names = (r.days ?? []).map((d) => WEEKDAYS[d]);
+      const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+      return `Every ${list} at ${r.time}`;
+    }
+    case "monthly":
+      return `Monthly on the ${ordinal(r.monthDay ?? 1)} at ${r.time}`;
+  }
 }
 
 /** "$0.0042" for small amounts, "$1.23" otherwise. */
