@@ -6,6 +6,7 @@ import type {
   Overview,
   PermissionReply,
   ProjectSummary,
+  SessionSearchHit,
   SessionSummary,
   SessionTranscript,
   Settings,
@@ -70,6 +71,8 @@ export const api = {
     request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/plan`, { approve: false, feedback }),
 
   sessions: (id: number) => request<SessionSummary[]>("GET", `/api/projects/${id}/sessions`),
+  searchSessions: (id: number, q: string) =>
+    request<SessionSearchHit[]>("GET", `/api/projects/${id}/sessions/search?q=${encodeURIComponent(q)}`),
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),
 
   overview: () => request<Overview>("GET", "/api/overview"),

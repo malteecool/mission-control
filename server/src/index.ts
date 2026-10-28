@@ -15,7 +15,14 @@ import {
 } from "./db.ts";
 import { getGitInfo } from "./lib/git.ts";
 import { createTask, deleteTask, getTask, readTasks, updateTask, validateTaskInput } from "./lib/tasks.ts";
-import { discoverProjects, lastSessionAt, listSessions, locateSession, readTranscript } from "./lib/claudeSessions.ts";
+import {
+  discoverProjects,
+  lastSessionAt,
+  listSessions,
+  locateSession,
+  readTranscript,
+  searchSessions,
+} from "./lib/claudeSessions.ts";
 import { PERMISSION_MODES, answerPermission, claudeInfo } from "./lib/claudeRunner.ts";
 import { getSettings, MODEL_RE, updateSettings, validateSettings } from "./lib/settings.ts";
 import { activeRunForTask, createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
@@ -322,6 +329,11 @@ app.delete("/api/projects/:id/tasks/:taskId", async (c) => {
 // ── Claude sessions & chat ──────────────────────────────────────────────────
 
 app.get("/api/projects/:id/sessions", async (c) => c.json(await listSessions(projectOr404(c.req.param("id")).path)));
+
+// Registered before /sessions/:sid so "search" isn't taken for a session id.
+app.get("/api/projects/:id/sessions/search", async (c) =>
+  c.json(await searchSessions(projectOr404(c.req.param("id")).path, (c.req.query("q") ?? "").slice(0, 200))),
+);
 
 app.get("/api/projects/:id/sessions/:sid", async (c) => {
   const t = await readTranscript(projectOr404(c.req.param("id")).path, c.req.param("sid"));

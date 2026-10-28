@@ -155,6 +155,17 @@ export interface SessionSummary {
   cwd?: string;
 }
 
+/** One session matching a History search, from GET /api/projects/:id/sessions/search?q=. */
+export interface SessionSearchHit {
+  sessionId: string;
+  updatedAt: string;
+  /** How many prompts, replies and tool calls matched. */
+  hits: number;
+  score: number;
+  /** The best few matches; itemId is the transcript item to scroll to. */
+  matches: Array<{ itemId: string; kind: "user" | "assistant" | "tool"; text: string; ts?: string }>;
+}
+
 export type ChatItem =
   | { kind: "user"; id: string; text: string; ts?: string }
   | { kind: "assistant"; id: string; text: string; ts?: string }

@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import type { ChatItem, DiscoveredProject, SessionSummary, SessionTranscript } from "../types.ts";
+import type { ChatItem, DiscoveredProject, SessionSearchHit, SessionSummary, SessionTranscript } from "../types.ts";
 
 export const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WORKTREE_MARKER = "--claude-worktrees-";
@@ -291,6 +291,106 @@ export async function readTranscript(projectPath: string, sessionId: string): Pr
     items: truncated ? items.slice(-MAX_ITEMS) : items,
     truncated,
   };
+}
+
+// ── Full-text search ────────────────────────────────────────────────────────
+// Searches what was said (prompts, Claude's replies) and what was touched (tool commands, file paths),
+// not tool output, which is mostly file dumps and logs. Each file's text is cached until it changes.
+
+type SearchEntry = { id: string; kind: "user" | "assistant" | "tool"; text: string; lower: string; ts?: string };
+const searchCache = new Map<string, { mtimeMs: number; size: number; entries: SearchEntry[] }>();
+
+async function searchEntries(file: string, mtimeMs: number, size: number): Promise<SearchEntry[]> {
+  const hit = searchCache.get(file);
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.entries;
+  const entries: SearchEntry[] = [];
+  const push = (id: string, kind: SearchEntry["kind"], text: string, ts?: string) =>
+    entries.push({ id, kind, text, lower: text.toLowerCase(), ts });
+  let n = 0;
+  const rl = readline.createInterface({ input: fs.createReadStream(file, "utf8"), crlfDelay: Infinity });
+  for await (const line of rl) {
+    // Cheap pre-filter: only user/assistant lines carry searchable text.
+    if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (e.isSidechain) continue;
+    if (e.type === "user") {
+      const prompt = userPromptText(e);
+      // Same ids readTranscript gives these items, so a hit can be scrolled to.
+      if (prompt) push(e.uuid ?? `u${n++}`, "user", prompt, e.timestamp);
+    } else if (e.type === "assistant" && Array.isArray(e.message?.content)) {
+      for (const b of e.message.content) {
+        if (b?.type === "text" && b.text?.trim()) push(`${e.uuid ?? n++}:t`, "assistant", b.text, e.timestamp);
+        else if (b?.type === "tool_use") {
+          const summary = toolSummary(b.name, b.input);
+          if (summary) push(b.id, "tool", `${b.name} ${summary}`, e.timestamp);
+        }
+      }
+    }
+  }
+  searchCache.set(file, { mtimeMs, size, entries });
+  return entries;
+}
+
+function snippet(text: string, lower: string, terms: string[], max = 220): string {
+  let at = lower.length;
+  for (const t of terms) {
+    const i = lower.indexOf(t);
+    if (i >= 0 && i < at) at = i;
+  }
+  if (at === lower.length) at = 0;
+  const start = Math.max(0, at - 60);
+  const flat = text.slice(start, start + max * 2).replace(/\s+/g, " ").trim();
+  const cut = flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
+  return (start > 0 ? "…" : "") + cut;
+}
+
+/** Sessions where every word of the query appears somewhere, best matches first. */
+export async function searchSessions(projectPath: string, query: string, limit = 50): Promise<SessionSearchHit[]> {
+  const phrase = query.trim().toLowerCase().replace(/\s+/g, " ");
+  const terms = [...new Set(phrase.split(" ").filter(Boolean))];
+  if (!terms.length) return [];
+
+  const files: Array<{ file: string; id: string; mtime: Date; size: number }> = [];
+  for (const { dir } of await sessionDirsFor(projectPath)) files.push(...(await listJsonl(dir)));
+
+  const out: SessionSearchHit[] = [];
+  const work = async (f: (typeof files)[number]) => {
+    const entries = await searchEntries(f.file, f.mtime.getTime(), f.size);
+    const seen = new Set<string>();
+    const matches: Array<{ e: SearchEntry; score: number }> = [];
+    for (const e of entries) {
+      let found = 0;
+      for (const t of terms) if (e.lower.includes(t)) found++, seen.add(t);
+      if (!found) continue;
+      // Whole-phrase hits and the human's own words count for more.
+      let score = found / terms.length;
+      if (terms.length > 1 && e.lower.includes(phrase)) score += 1;
+      if (e.kind === "user") score += 0.25;
+      else if (e.kind === "tool") score -= 0.25;
+      matches.push({ e, score });
+    }
+    if (seen.size < terms.length) return;
+    const best = [...matches].sort((a, b) => b.score - a.score).slice(0, 3);
+    out.push({
+      sessionId: f.id,
+      updatedAt: f.mtime.toISOString(),
+      hits: matches.length,
+      score: best.reduce((sum, m) => sum + m.score, 0) + Math.log10(1 + matches.length),
+      matches: best.map(({ e }) => ({ itemId: e.id, kind: e.kind, text: snippet(e.text, e.lower, terms), ts: e.ts })),
+    });
+  };
+  // A few files at a time: the first search reads every transcript in full.
+  const queue = [...files];
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    for (let f = queue.shift(); f; f = queue.shift()) await work(f);
+  }));
+
+  return out.sort((a, b) => b.score - a.score || b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
 }
 
 /** Folders Claude Code has sessions for — candidates to register as projects. */

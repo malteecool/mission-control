@@ -37,7 +37,7 @@ export function Transcript({ items, draft, running }: { items: ChatItem[]; draft
         switch (it.kind) {
           case "user":
             return (
-              <div key={it.id} className="flex justify-end">
+              <div key={it.id} data-items={it.id} className="flex justify-end">
                 <div className="max-w-[85%] rounded-2xl rounded-br-md border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] px-4 py-2.5">
                   <div className="mb-1 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-[var(--accent)]">
                     <User size={10} /> You
@@ -48,7 +48,7 @@ export function Transcript({ items, draft, running }: { items: ChatItem[]; draft
             );
           case "assistant":
             return (
-              <div key={it.id} className="flex gap-3">
+              <div key={it.id} data-items={it.id} className="flex gap-3">
                 <Avatar />
                 <div className="min-w-0 flex-1 pt-0.5 text-slate-200">
                   <Markdown text={it.text} />
@@ -56,7 +56,11 @@ export function Transcript({ items, draft, running }: { items: ChatItem[]; draft
               </div>
             );
           case "tools":
-            return <ToolGroup key={it.id} tools={it.tools} live={!!running && isLast && !draft} />;
+            return (
+              <div key={it.id} data-items={it.tools.map((t) => t.id).join(" ")}>
+                <ToolGroup tools={it.tools} live={!!running && isLast && !draft} />
+              </div>
+            );
           case "system":
             return (
               <div key={it.id} className="flex items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-wider text-slate-500">
