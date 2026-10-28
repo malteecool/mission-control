@@ -74,7 +74,7 @@
       "kind": "feature",
       "priority": 2,
       "createdAt": "2026-10-27T18:42:25.566Z",
-      "updatedAt": "2026-10-27T18:43:10.862Z",
+      "updatedAt": "2026-10-27T21:20:47.724Z",
       "notes": "Users should be able to add a project directly from git. This means we first need to clone it to a local folder."
     },
     {
@@ -149,11 +149,13 @@
       "id": "2fd287db-ccb2-4a85-8352-77ca9a9beb22",
       "title": "Plan first, then build",
       "notes": "Per-task option to start the session in Plan mode. Show the plan on the card to approve, then continue the same session in the project's task mode.",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 2,
       "createdAt": "2026-10-27T19:31:06.871Z",
-      "updatedAt": "2026-10-27T19:31:06.871Z"
+      "updatedAt": "2026-10-28T09:21:39.015Z",
+      "sessionId": "22382d85-b53b-4338-9265-df38a170001e",
+      "doneAt": "2026-10-28T09:19:53.788Z"
     },
     {
       "id": "292e26b1-1c71-4df1-9c06-6f2d099b68de",
@@ -191,31 +193,47 @@
       "id": "024e18cd-b633-4566-95b6-656c9d1af0e6",
       "title": "Project health on the overview",
       "notes": "Per project: uncommitted changes, unpushed commits, last test result, stale branch warning.",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 3,
       "createdAt": "2026-10-27T19:31:06.910Z",
-      "updatedAt": "2026-10-27T19:31:06.910Z"
+      "updatedAt": "2026-10-28T09:36:42.257Z",
+      "sessionId": "876c75ea-45ed-479c-8d44-b0e049d934ce",
+      "doneAt": "2026-10-28T09:36:22.968Z"
     },
     {
       "id": "ac9771f9-754d-4442-b292-67462e41022a",
       "title": "Dev server buttons per project",
       "notes": "Start and stop a project's dev command (npm run dev etc.) from its page, with logs and an 'open preview' link.",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 3,
       "createdAt": "2026-10-27T19:31:06.920Z",
-      "updatedAt": "2026-10-27T19:31:06.920Z"
+      "updatedAt": "2026-10-28T09:40:36.096Z",
+      "sessionId": "2cffaff8-40b5-41c7-b435-d55795eff58f",
+      "doneAt": "2026-10-28T09:40:10.209Z"
     },
     {
       "id": "79bca695-d8dd-4be9-8c0a-04b2f2873dbd",
       "title": "Search across Claude session history",
       "notes": "Full-text search over all sessions in History, e.g. 'where did I fix that auth bug?'.",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 3,
       "createdAt": "2026-10-27T19:31:06.930Z",
-      "updatedAt": "2026-10-27T19:31:06.930Z"
+      "updatedAt": "2026-10-28T09:30:18.495Z",
+      "sessionId": "af93783d-a642-4059-85d9-d1fa9f072d4d",
+      "doneAt": "2026-10-28T09:25:51.585Z"
+    },
+    {
+      "id": "d8212040-66fd-4810-a8b5-73031288dcee",
+      "title": "Dev servers survive dashboard restarts on Windows",
+      "notes": "When the dashboard API restarts (server/scripts/dev.mjs kills it with TerminateProcess on Windows), dev servers started from the Dev tab keep running orphaned and hold their ports. Remember their PIDs and stop or re-adopt them on startup.",
+      "status": "todo",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-28T09:39:59.512Z",
+      "updatedAt": "2026-10-28T09:39:59.512Z"
     }
   ]
 }

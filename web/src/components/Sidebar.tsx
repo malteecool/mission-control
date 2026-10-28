@@ -1,8 +1,26 @@
+import type { ReactNode } from "react";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { FolderX, LayoutGrid, Pin, Plus, Settings2 } from "lucide-react";
-import type { ProjectSummary } from "../lib/api.ts";
-import { href, useRoute } from "../lib/router.ts";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  BarChart3,
+  Code2,
+  Copy,
+  FolderOpen,
+  FolderX,
+  History,
+  LayoutGrid,
+  ListTodo,
+  MessageSquare,
+  Pin,
+  PinOff,
+  Plus,
+  Settings2,
+  Trash2,
+} from "lucide-react";
+import { api, type ProjectSummary } from "../lib/api.ts";
+import { href, navigate, useRoute, type Tab } from "../lib/router.ts";
+import { attempt, menu, type MenuItem } from "./ContextMenu.tsx";
 import { activeRuns, useRuns } from "../lib/runs.ts";
 import { timeAgo } from "../lib/util.ts";
 import { Dot } from "./ui.tsx";
@@ -21,6 +39,61 @@ export function Sidebar({
   const running = live.map((r) => r.projectId);
   const awaiting = live.filter((r) => r.permissions.length).map((r) => r.projectId);
   const activeId = route.name === "project" ? route.id : undefined;
+  const qc = useQueryClient();
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["projects"] });
+    qc.invalidateQueries({ queryKey: ["overview"] });
+  };
+
+  const projectMenu = (p: ProjectSummary) =>
+    menu(() => {
+      const open = (tab: Tab, label: string, icon: ReactNode): MenuItem => ({
+        label,
+        icon,
+        onSelect: () => navigate({ name: "project", id: p.id, tab }),
+      });
+      return [
+        { heading: p.name },
+        open("tasks", "Tasks", <ListTodo size={14} />),
+        open("chat", "Chat", <MessageSquare size={14} />),
+        open("history", "History", <History size={14} />),
+        open("usage", "Usage", <BarChart3 size={14} />),
+        "separator",
+        {
+          label: p.pinned ? "Unpin" : "Pin to top",
+          icon: p.pinned ? <PinOff size={13} /> : <Pin size={13} />,
+          onSelect: attempt(async () => {
+            await api.updateProject(p.id, { pinned: !p.pinned });
+            refresh();
+          }),
+        },
+        {
+          label: "Open folder",
+          icon: <FolderOpen size={14} />,
+          disabled: !p.exists,
+          onSelect: attempt(() => api.openProject(p.id, "folder")),
+        },
+        {
+          label: "Open in VS Code",
+          icon: <Code2 size={14} />,
+          disabled: !p.exists,
+          onSelect: attempt(() => api.openProject(p.id, "editor")),
+        },
+        { label: "Copy path", icon: <Copy size={13} />, onSelect: attempt(() => navigator.clipboard.writeText(p.path)) },
+        "separator",
+        {
+          label: "Remove from dashboard",
+          icon: <Trash2 size={13} />,
+          danger: true,
+          onSelect: attempt(async () => {
+            if (!confirm(`Remove "${p.name}" from the dashboard? The folder and its files are not touched.`)) return;
+            await api.removeProject(p.id);
+            refresh();
+            if (activeId === p.id) navigate({ name: "overview" });
+          }),
+        },
+      ];
+    });
 
   return (
     <aside className="hidden min-h-0 flex-col border-r border-white/[0.06] bg-[#060912]/70 backdrop-blur-xl md:flex">
@@ -92,6 +165,7 @@ export function Sidebar({
                 )}
                 <a
                   href={href({ name: "project", id: p.id, tab: route.name === "project" ? route.tab : "tasks" })}
+                  onContextMenu={projectMenu(p)}
                   className={clsx(
                     "relative flex items-center gap-2.5 rounded-lg px-3 py-2 transition",
                     active ? "text-white" : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200",

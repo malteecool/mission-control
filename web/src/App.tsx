@@ -11,6 +11,7 @@ import { Overview } from "./components/Overview.tsx";
 import { ProjectView } from "./components/ProjectView.tsx";
 import { SettingsPage } from "./components/SettingsPage.tsx";
 import { ApprovalPopups } from "./components/ApprovalPopups.tsx";
+import { ContextMenuHost } from "./components/ContextMenu.tsx";
 import { useSettings } from "./lib/settings.ts";
 import { useNotifications } from "./lib/notify.ts";
 import { Kbd } from "./components/ui.tsx";
@@ -80,6 +81,7 @@ export function App() {
       />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <ApprovalPopups projects={projects.data ?? []} />
+      <ContextMenuHost />
     </>
   );
 }

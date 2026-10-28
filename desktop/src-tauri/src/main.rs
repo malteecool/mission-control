@@ -138,14 +138,17 @@ fn dashboard_url(app: &AppHandle, port: u16) -> tauri::Url {
     }
 }
 
+const INIT_SCRIPT: &str = include_str!("init.js");
+
 fn create_window(app: &AppHandle, url: tauri::Url) -> tauri::Result<tauri::WebviewWindow> {
     let win = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::External(url))
         .title("Mission Control")
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
         .background_color(Color(5, 7, 13, 255))
-        // Tells the page the shell sends approval alerts itself (see approvals.rs), so it doesn't send them twice.
-        .initialization_script("window.__MISSION_CONTROL_DESKTOP__ = true;")
+        // Tells the page the shell sends approval alerts itself (see approvals.rs), so it doesn't send them twice,
+        // and hides the browser's own right-click menu (Back, Reload, Save as…) except where it helps.
+        .initialization_script(INIT_SCRIPT)
         // Tauri's native file-drop handler swallows HTML5 drag events on Windows, which breaks dragging tasks between lanes.
         .disable_drag_drop_handler()
         .theme(Some(tauri::Theme::Dark))
