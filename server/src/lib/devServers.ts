@@ -239,11 +239,31 @@ function processTable(): ProcessEntry[] {
   return table;
 }
 
+/** When the machine last booted, ms since epoch, or undefined if it can't be told. */
+function bootTime(): number | undefined {
+  if (process.platform === "win32") {
+    const script = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')";
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+    const t = Date.parse((r.stdout ?? "").trim());
+    return Number.isNaN(t) ? undefined : t;
+  }
+  try {
+    const uptime = Number(fs.readFileSync("/proc/uptime", "utf8").split(" ")[0]);
+    if (uptime > 0) return Date.now() - uptime * 1000;
+  } catch {
+    // Not Linux.
+  }
+  const r = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 5_000 }); // macOS / BSD: "{ sec = 1700000000, usec = 0 } ..."
+  const sec = Number(/sec = (\d+)/.exec(r.stdout ?? "")?.[1]);
+  return sec > 0 ? sec * 1000 : undefined;
+}
+
 /**
  * The processes still running from a dev server started as `root` at `startedAt`. The root itself is often gone
  * (on Windows the outer cmd.exe dies with us while npm's children live on), but Windows keeps each process's parent
  * PID after the parent exits, so the rest can still be found. Start times guard against reused PIDs: the root must
- * have started when ours did, and every descendant after its parent.
+ * have started when ours did, every descendant after its parent, and, when the root is gone, its direct children
+ * within a minute of it (anything later is more likely a stranger that inherited the PID as its parent).
  */
 function leftoverTree(table: ProcessEntry[], root: number, startedAt: number): number[] {
   const SLACK = 10_000; // Clock and timestamp rounding between our record and the OS.
@@ -251,11 +271,13 @@ function leftoverTree(table: ProcessEntry[], root: number, startedAt: number): n
   const live = byPid.get(root);
   if (live && Math.abs(live.started - startedAt) > SLACK) return []; // The PID belongs to something else now.
   const found: number[] = live ? [root] : [];
+  const CHILD_WINDOW = 60_000; // How soon after the dev command its direct children start.
   const queue = [{ pid: root, started: live?.started ?? startedAt }];
   while (queue.length) {
     const parent = queue.shift()!;
     for (const p of table) {
       if (p.ppid !== parent.pid || p.pid === parent.pid || p.started < parent.started - SLACK || found.includes(p.pid)) continue;
+      if (!live && parent.pid === root && p.started > startedAt + CHILD_WINDOW) continue;
       found.push(p.pid);
       queue.push(p);
     }
@@ -270,7 +292,11 @@ function stopLeftovers() {
   } catch {
     return;
   }
-  if (!Array.isArray(records) || !records.length) return saveRunning([]);
+  if (!Array.isArray(records)) return saveRunning([]);
+  // A dev server started before the last boot is long gone, and its PIDs may now belong to anything.
+  const booted = bootTime();
+  if (booted !== undefined) records = records.filter((r) => Date.parse(r.startedAt) > booted);
+  if (!records.length) return saveRunning([]);
   const table = processTable();
   for (const r of records) {
     const pids = leftoverTree(table, r.pid, Date.parse(r.startedAt));
