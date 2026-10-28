@@ -5,6 +5,7 @@ import { api, type ProjectSummary } from "../lib/api.ts";
 import { href } from "../lib/router.ts";
 import { KIND_STYLE, timeAgo } from "../lib/util.ts";
 import { Button, Dot, Empty, Panel } from "./ui.tsx";
+import { HealthPanel } from "./HealthPanel.tsx";
 import { UsagePanel } from "./UsagePanel.tsx";
 
 export function Overview({ projects, onAdd }: { projects: ProjectSummary[]; onAdd: () => void }) {
@@ -106,6 +107,11 @@ export function Overview({ projects, onAdd }: { projects: ProjectSummary[]; onAd
             ))}
           </ol>
         </Panel>
+      </div>
+
+      <div>
+        <div className="hud-label mb-3">Project health</div>
+        <HealthPanel projects={projects} />
       </div>
 
       <div>

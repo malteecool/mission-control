@@ -5,6 +5,7 @@ import type {
   RunInfo,
   Overview,
   PermissionReply,
+  ProjectHealth,
   ProjectSummary,
   SessionSearchHit,
   SessionSummary,
@@ -76,6 +77,7 @@ export const api = {
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),
 
   overview: () => request<Overview>("GET", "/api/overview"),
+  health: () => request<ProjectHealth[]>("GET", "/api/health"),
   usage: (projectId?: number, days = 30) =>
     request<UsageReport>("GET", `/api/usage?days=${days}${projectId === undefined ? "" : `&projectId=${projectId}`}`),
 

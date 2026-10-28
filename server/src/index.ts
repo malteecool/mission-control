@@ -13,11 +13,12 @@ import {
   updateProject,
   COLORS,
 } from "./db.ts";
-import { getGitInfo } from "./lib/git.ts";
+import { getGitHealth, getGitInfo } from "./lib/git.ts";
 import { createTask, deleteTask, getTask, readTasks, updateTask, validateTaskInput } from "./lib/tasks.ts";
 import {
   discoverProjects,
   lastSessionAt,
+  lastTestRun,
   listSessions,
   locateSession,
   readTranscript,
@@ -30,7 +31,17 @@ import { finishTaskTurn, startTaskRun, stopTaskRun, taskForSession } from "./lib
 import { ReviewError, changeSummaries, commitChanges, dismissReview, revertChanges, taskChanges } from "./lib/review.ts";
 import { watchTasksStream } from "./lib/taskWatcher.ts";
 import { usageReport } from "./lib/usage.ts";
-import type { ChatRequest, DesktopStatus, Overview, PermissionReply, Project, ProjectSummary, Task, TaskStatus } from "./types.ts";
+import type {
+  ChatRequest,
+  DesktopStatus,
+  Overview,
+  PermissionReply,
+  Project,
+  ProjectHealth,
+  ProjectSummary,
+  Task,
+  TaskStatus,
+} from "./types.ts";
 
 // Not plain PORT: dev tools often set that for the web app, which would make both servers fight over one port.
 const PORT = Number(process.env.DASHBOARD_API_PORT ?? 4317);
@@ -456,6 +467,19 @@ app.get("/api/overview", async (c) => {
       .slice(0, 12),
   };
   return c.json(overview);
+});
+
+// Uncommitted changes, unpushed commits, stale branches and the last test Claude ran, per project.
+app.get("/api/health", async (c) => {
+  const health = await Promise.all(
+    listProjects().map(async (p): Promise<ProjectHealth> => {
+      if (!fs.existsSync(p.path))
+        return { projectId: p.id, exists: false, isRepo: false, uncommitted: 0, unpushed: 0, behind: 0, hasRemote: false, noUpstream: false, staleBranches: [] };
+      const [git, lastTest] = await Promise.all([getGitHealth(p.path), lastTestRun(p.path).catch(() => undefined)]);
+      return { projectId: p.id, exists: true, ...git, lastTest };
+    }),
+  );
+  return c.json(health);
 });
 
 // ── Static web build (production) ───────────────────────────────────────────

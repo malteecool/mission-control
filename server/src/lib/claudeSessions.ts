@@ -5,7 +5,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import type { ChatItem, DiscoveredProject, SessionSearchHit, SessionSummary, SessionTranscript } from "../types.ts";
+import type { ChatItem, DiscoveredProject, SessionSearchHit, SessionSummary, SessionTranscript, TestRun } from "../types.ts";
 
 export const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WORKTREE_MARKER = "--claude-worktrees-";
@@ -391,6 +391,98 @@ export async function searchSessions(projectPath: string, query: string, limit =
   }));
 
   return out.sort((a, b) => b.score - a.score || b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit);
+}
+
+// ── Last test run ───────────────────────────────────────────────────────────
+// The dashboard doesn't run tests itself, so "last test result" is the last test (or type check) Claude ran in
+// one of the project's sessions. Claude often pipes these through `head` or echoes `$?`, which hides the exit
+// code from Claude Code, so the output is read too.
+
+const TEST_COMMAND_RE =
+  /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|typecheck|type-check|check)\b|vitest|jest|mocha|pytest|playwright\s+test|cargo\s+(?:test|nextest)|go\s+test|dotnet\s+test|mvn\b.*\btest|gradlew?\b.*\btest|rspec|phpunit|tox\b|deno\s+test|node\s+--test|python3?\s+-m\s+(?:pytest|unittest)|tsc\b[^|;&]*--noEmit|mypy|pyright)/i;
+// Commands that merely mention a test tool (commit messages, searches).
+const NOT_A_RUN_RE = /^(?:cd\s+\S+\s*(?:&&|;)\s*)?(?:git|grep|rg|cat|echo|ls|sed|find|head|tail)\b/;
+// The call never ran, so it says nothing about the tests.
+const NO_OUTCOME_RE = /^\[(?:Tool call|Request) interrupted|doesn't want to proceed|^Permission to use|^Command running in background/;
+const EXIT_RE = /(?:exit(?:\s*code)?|tsc)\s*[:=]?\s*(\d+)\b/gi;
+const FAILURE_RE =
+  /error TS\d+|\b[1-9]\d* (?:failed|failing|errors?)\b|^\s*FAIL\b|npm ERR!|test result: FAILED|Tests?:\s+[1-9]\d* failed/im;
+const SUMMARY_RE =
+  /\b\d+\s+(?:passed|passing|failed|failing|errors?|tests?)\b|\bTests?:|test result:|exit(?:\s*code)?\s*[:=]?\s*\d+/i;
+
+/** The part of a shell line that runs tests, e.g. "npm test" out of "cd app && npm test 2>&1 | tail"; null if none does. */
+function testSegment(command: string): string | null {
+  const parts = withoutHeredocs(command).split(/&&|\|\||[;|\n]/).map((p) => p.trim());
+  const part = parts.find((p) => TEST_COMMAND_RE.test(p) && !NOT_A_RUN_RE.test(p));
+  return part ? part.replace(/(?:\s*\d?>>?\s*&?\S+)+\s*$/, "") : null;
+}
+
+/** Drops heredoc bodies (scripts piped into python, file contents) so only the shell commands themselves are left. */
+function withoutHeredocs(command: string): string {
+  return command.replace(/<<-?\s*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?\n\s*\2[ \t]*(?=\n|$)/g, "$3");
+}
+
+function rawResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((b: any) => (b?.type === "text" ? b.text : "")).join("\n");
+  return "";
+}
+
+function testOutcome(output: string, isError: boolean): { passed: boolean; summary?: string } {
+  const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
+  const summaryLine = [...lines].reverse().find((l) => SUMMARY_RE.test(l));
+  const typeErrors = lines.filter((l) => /error TS\d+/.test(l)).length;
+  const summary = summaryLine
+    ? oneLine(summaryLine, 120)
+    : typeErrors
+      ? `${typeErrors} type error${typeErrors === 1 ? "" : "s"}`
+      : undefined;
+  const exits = [...output.matchAll(EXIT_RE)];
+  if (exits.length) return { passed: exits[exits.length - 1][1] === "0", summary };
+  return { passed: !isError && !FAILURE_RE.test(output), summary };
+}
+
+/** The last test run found in one session file's tail, or null. */
+function lastTestIn(entries: any[], sessionId: string): TestRun | null {
+  const pending = new Map<string, { command: string; at?: string }>();
+  let last: TestRun | null = null;
+  for (const e of entries) {
+    if (!Array.isArray(e.message?.content)) continue;
+    for (const b of e.message.content) {
+      if (e.type === "assistant" && b?.type === "tool_use" && (b.name === "Bash" || b.name === "PowerShell")) {
+        const command = b.input?.command;
+        if (typeof command !== "string" || b.input?.run_in_background) continue;
+        const segment = testSegment(command);
+        if (segment) pending.set(b.id, { command: segment, at: e.timestamp });
+      } else if (e.type === "user" && b?.type === "tool_result" && pending.has(b.tool_use_id)) {
+        const { command, at } = pending.get(b.tool_use_id)!;
+        pending.delete(b.tool_use_id);
+        const output = rawResultText(b.content);
+        if (NO_OUTCOME_RE.test(output.trim())) continue;
+        last = { command: oneLine(command, 120), at: e.timestamp ?? at, sessionId, ...testOutcome(output, !!b.is_error) };
+      }
+    }
+  }
+  return last;
+}
+
+const testCache = new Map<string, { mtimeMs: number; size: number; run: TestRun | null }>();
+
+export async function lastTestRun(projectPath: string): Promise<TestRun | undefined> {
+  const files: Array<{ file: string; id: string; mtime: Date; size: number }> = [];
+  for (const { dir } of await sessionDirsFor(projectPath)) files.push(...(await listJsonl(dir)));
+  files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  // Only the newest few sessions, and only their tails: an old result isn't much of a health signal anyway.
+  for (const f of files.slice(0, 10)) {
+    let hit = testCache.get(f.file);
+    if (!hit || hit.mtimeMs !== f.mtime.getTime() || hit.size !== f.size) {
+      const run = lastTestIn(await readChunk(f.file, "tail", 2 * 1024 * 1024), f.id);
+      hit = { mtimeMs: f.mtime.getTime(), size: f.size, run };
+      testCache.set(f.file, hit);
+    }
+    if (hit.run) return hit.run;
+  }
+  return undefined;
 }
 
 /** Folders Claude Code has sessions for — candidates to register as projects. */

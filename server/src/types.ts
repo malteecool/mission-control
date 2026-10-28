@@ -91,6 +91,43 @@ export interface GitInfo {
   lastCommitMessage?: string;
 }
 
+/** The last test command Claude ran in one of the project's sessions, and how it went. */
+export interface TestRun {
+  command: string;
+  passed: boolean;
+  at?: string;
+  sessionId: string;
+  /** A line from the output that sums it up, e.g. "Tests: 2 failed, 40 passed". */
+  summary?: string;
+}
+
+/** A local branch worth cleaning up: no commits for a while, or its remote branch was deleted. */
+export interface StaleBranch {
+  name: string;
+  lastCommitAt: string;
+  /** Its upstream branch no longer exists (usually merged and deleted on the remote). */
+  gone: boolean;
+}
+
+/** One entry per project for the overview's health panel, from GET /api/health. */
+export interface ProjectHealth {
+  projectId: number;
+  exists: boolean;
+  isRepo: boolean;
+  branch?: string;
+  /** Files with uncommitted changes, untracked ones included. */
+  uncommitted: number;
+  /** Commits on HEAD that aren't on its upstream, or on any remote when it has no upstream. */
+  unpushed: number;
+  /** Commits on the upstream that HEAD doesn't have yet (as of the last fetch). */
+  behind: number;
+  hasRemote: boolean;
+  /** HEAD's branch isn't tracking a remote branch. */
+  noUpstream: boolean;
+  staleBranches: StaleBranch[];
+  lastTest?: TestRun;
+}
+
 export interface Project {
   id: number;
   name: string;
