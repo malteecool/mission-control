@@ -21,8 +21,13 @@ export function activeRuns(runs: RunInfo[], projectId?: number): RunInfo[] {
   return runs.filter((r) => isActive(r) && (projectId === undefined || r.projectId === projectId));
 }
 
+/** The task's own active run (not the review agent looking it over). */
 export function activeRunForTask(runs: RunInfo[], taskId: string): RunInfo | undefined {
-  return runs.find((r) => r.taskId === taskId && isActive(r));
+  return runs.find((r) => r.taskId === taskId && !r.role && isActive(r));
+}
+
+export function activeReviewerRun(runs: RunInfo[], taskId: string): RunInfo | undefined {
+  return runs.find((r) => r.taskId === taskId && r.role === "reviewer" && isActive(r));
 }
 
 /** When a run finishes, refresh what it may have changed (task lanes, sessions, git state). */

@@ -232,6 +232,21 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
                 </span>
               </span>
             </label>
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={p.autoReview}
+                onChange={(e) => update.mutate({ autoReview: e.target.checked })}
+                className="mt-0.5 accent-[var(--accent)]"
+              />
+              <span className="text-sm text-slate-200">
+                Review finished tasks and suggest what's next
+                <span className="block text-xs text-slate-500">
+                  When a task reaches Done, a read-only review agent looks over its changes, notes problems on the card,
+                  and adds up to 3 follow-up tasks (bugs, loose ends, next improvements) to To do.
+                </span>
+              </span>
+            </label>
             <label className="flex items-center gap-2 text-sm text-slate-300">
               Task sessions run in
               <select

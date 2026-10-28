@@ -72,6 +72,7 @@ interface Proc {
   permissionMode: PermissionMode;
   emit: (ev: ChatEvent) => void;
   onPlan?: (plan: string) => void;
+  readOnly?: boolean;
 }
 const procs = new Map<string, Proc>();
 
@@ -131,7 +132,15 @@ export interface LaunchOptions {
    * (a plan-first task shows the plan on its card for approval).
    */
   onPlan?: (plan: string) => void;
+  /**
+   * Look, don't touch (the review agent): calls that would need approval are refused instead of asked about, except
+   * git commands that only read.
+   */
+  readOnly?: boolean;
 }
+
+/** A single git command that only reads: no chaining, redirection or substitution. */
+const READ_ONLY_GIT = /^\s*git\s+(?:--no-pager\s+)?(?:diff|log|show|status|blame|ls-files|ls-tree|rev-parse|cat-file)\b[^;&|<>`$]*$/;
 
 /**
  * Starts Claude Code for one prompt. Every event goes to `emit`; the last one is always either
@@ -164,7 +173,7 @@ export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: Chat
 
   const { command, shell } = claudeCommand();
   const child = spawn(command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
-  const proc: Proc = { child, stopped: false, pending: new Map(), permissionMode: opts.permissionMode, emit, onPlan: opts.onPlan };
+  const proc: Proc = { child, stopped: false, pending: new Map(), permissionMode: opts.permissionMode, emit, onPlan: opts.onPlan, readOnly: opts.readOnly };
   procs.set(runId, proc);
 
   let finished = false;
@@ -257,6 +266,26 @@ function handleControlRequest(proc: Proc, e: any) {
       },
     });
     if (plan) proc.emit({ type: "item", item: { kind: "system", id: randomUUID(), text: "Plan sent to the task card for approval" } });
+    return;
+  }
+  if (proc.readOnly) {
+    const allow = req.tool_name === "Bash" && READ_ONLY_GIT.test(String(req.input?.command ?? ""));
+    writeLine(proc.child, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: e.request_id,
+        response: allow
+          ? { behavior: "allow", updatedInput: req.input }
+          : {
+              behavior: "deny",
+              message:
+                req.tool_name === "AskUserQuestion"
+                  ? "Nobody is watching this session to answer. Use your own judgement."
+                  : "This session is read-only: read files and use git diff/log/show/status/blame, but don't change or run anything else.",
+            },
+      },
+    });
     return;
   }
   // Even in bypassPermissions mode Claude Code still asks before some calls (e.g. edits under

@@ -132,7 +132,7 @@ export function ChatPanel({ projectId }: { projectId: number }) {
                   r.permissions.length ? "bg-amber-400" : r.status === "queued" ? "bg-slate-500" : "bg-[var(--accent)]",
                 )}
               />
-              {r.taskId && <span className="font-mono text-[9px] uppercase tracking-wider opacity-70">task</span>}
+              {r.taskId && <span className="font-mono text-[9px] uppercase tracking-wider opacity-70">{r.role === "reviewer" ? "review" : "task"}</span>}
               <span className="truncate">{r.title}</span>
               <span className="shrink-0 font-mono text-[9px] opacity-70">
                 {r.permissions.length ? "needs you" : r.status === "queued" ? "queued" : "running"}

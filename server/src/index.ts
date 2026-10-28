@@ -28,6 +28,7 @@ import { PERMISSION_MODES, answerPermission, claudeInfo } from "./lib/claudeRunn
 import { getSettings, MODEL_RE, updateSettings, validateSettings } from "./lib/settings.ts";
 import { activeRunForTask, createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
 import { finishTaskTurn, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
+import { recoverReviewers, reviewIfEnabled, startReviewer } from "./lib/reviewer.ts";
 import {
   ReviewError,
   changeSummaries,
@@ -160,6 +161,7 @@ app.patch("/api/projects/:id", async (c) => {
     autoRun: typeof body.autoRun === "boolean" ? body.autoRun : undefined,
     autoPermissionMode: body.autoPermissionMode,
     parallelTasks: typeof body.parallelTasks === "boolean" ? body.parallelTasks : undefined,
+    autoReview: typeof body.autoReview === "boolean" ? body.autoReview : undefined,
     touch: body.touch === true,
   });
   return c.json(await summarise(updated!));
@@ -323,7 +325,18 @@ app.patch("/api/projects/:id/tasks/:taskId", async (c) => {
   if (!task) throw new HttpError(404, "Task not found");
   if (leaving) stopTaskRun(taskId);
   if (entering && p.autoRun && fs.existsSync(p.path)) await startTaskRun(p, task);
+  if (input.status === "done" && before.status !== "done" && fs.existsSync(p.path)) reviewIfEnabled(p, task);
   return c.json(task);
+});
+
+// Run the review agent on a finished task now (again, if it already reviewed it).
+app.post("/api/projects/:id/tasks/:taskId/reviewer", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  const task = await getTask(p.path, c.req.param("taskId"));
+  if (!task) throw new HttpError(404, "Task not found");
+  if (task.status !== "done") throw new HttpError(409, "The review agent looks at finished tasks; move this one to Done first");
+  return c.json(await startReviewer(p, task), 201);
 });
 
 // Start (or retry) a Claude session for a task by hand; moves it to "In progress" if needed.
@@ -625,4 +638,5 @@ if (fs.existsSync(webDist)) {
 serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, (info) => {
   console.log(`Project dashboard API on http://localhost:${info.port}`);
   startScheduler();
+  void recoverReviewers();
 });

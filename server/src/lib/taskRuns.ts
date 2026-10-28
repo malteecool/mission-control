@@ -7,6 +7,7 @@
 import type { ChatEvent, Project, RunInfo, Task } from "../types.ts";
 import { beginReview, endReview } from "./review.ts";
 import { activeRunForTask, createRun, stopRun } from "./runs.ts";
+import { reviewIfEnabled } from "./reviewer.ts";
 import { getSettings } from "./settings.ts";
 import { getTask, readTasks, updateTask, type TaskInput } from "./tasks.ts";
 import { createWorktree, importFollowUps } from "./worktrees.ts";
@@ -229,7 +230,8 @@ export async function applyOutcome(project: Project, taskId: string, info: RunIn
   const text = (last?.type === "done" && last.result) || "";
   const blocked = MARKER_BLOCKED.exec(text);
   if (MARKER_DONE.test(text) && !blocked) {
-    await updateTask(project.path, taskId, { status: "done", agentStatus: undefined, agentNote: undefined });
+    const done = await updateTask(project.path, taskId, { status: "done", agentStatus: undefined, agentNote: undefined });
+    if (done) reviewIfEnabled(project, done);
   } else {
     await updateTask(project.path, taskId, {
       agentStatus: "blocked",

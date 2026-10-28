@@ -37,6 +37,7 @@ const isActive = (r: Run) => r.info.status === "queued" || r.info.status === "ru
 export function createRun(opts: {
   projectId: number;
   taskId?: string;
+  role?: RunInfo["role"];
   title: string;
   launch: LaunchOptions;
   queueKey?: string;
@@ -47,6 +48,7 @@ export function createRun(opts: {
       id: randomUUID(),
       projectId: opts.projectId,
       taskId: opts.taskId,
+      role: opts.role,
       sessionId: opts.launch.sessionId,
       title: opts.title,
       status: "queued",
@@ -170,8 +172,13 @@ export function listRuns(projectId?: number): RunInfo[] {
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 }
 
+/** The task's own active run (not the review agent looking it over). */
 export function activeRunForTask(taskId: string): RunInfo | undefined {
-  return [...runs.values()].find((r) => r.info.taskId === taskId && isActive(r))?.info;
+  return [...runs.values()].find((r) => r.info.taskId === taskId && !r.info.role && isActive(r))?.info;
+}
+
+export function activeReviewerRun(taskId: string): RunInfo | undefined {
+  return [...runs.values()].find((r) => r.info.taskId === taskId && r.info.role === "reviewer" && isActive(r))?.info;
 }
 
 /** Replays the run's events, then streams new ones until it ends; returns an NDJSON stream. */

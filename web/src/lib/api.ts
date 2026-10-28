@@ -46,7 +46,7 @@ export const api = {
     request<ProjectSummary>("POST", "/api/projects", body),
   updateProject: (
     id: number,
-    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks">> & {
+    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks" | "autoReview">> & {
       touch?: boolean;
     },
   ) =>
@@ -79,6 +79,7 @@ export const api = {
   dismissChanges: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}/changes`),
   askForChanges: (id: number, taskId: string, feedback: string) =>
     request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`, { feedback }),
+  runReviewer: (id: number, taskId: string) => request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/reviewer`),
   approvePlan: (id: number, taskId: string, note?: string) =>
     request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/plan`, { approve: true, note }),
   revisePlan: (id: number, taskId: string, feedback: string) =>

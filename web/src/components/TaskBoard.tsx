@@ -2,14 +2,15 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Repeat, Square, StepForward, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Repeat, ScanSearch, Sparkles, Square, StepForward, Trash2 } from "lucide-react";
 import { api, type ChangeSummary, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus, type UsageTotals } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
-import { activeRunForTask, useRuns } from "../lib/runs.ts";
+import { activeReviewerRun, activeRunForTask, useRuns } from "../lib/runs.ts";
 import { useTaskWatch } from "../lib/taskWatch.ts";
 import { AgentStrip, Strip, StripButton } from "./AgentStrip.tsx";
 import { ReviewDialog } from "./ReviewDialog.tsx";
+import { ReviewerStrip } from "./ReviewerStrip.tsx";
 import { PlanReview } from "./PlanReview.tsx";
 import { ScheduleDialog } from "./ScheduleDialog.tsx";
 import { KIND_STYLE, formatUsd, timeAgo } from "../lib/util.ts";
@@ -109,6 +110,12 @@ export function TaskBoard({ projectId }: { projectId: number }) {
     },
   });
   const remove = useMutation({ mutationFn: (id: string) => api.deleteTask(projectId, id), onSuccess: invalidate });
+  const runReviewer = (id: string) =>
+    attempt(async () => {
+      await api.runReviewer(projectId, id);
+      invalidate();
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    })();
   const stopRun = (run: RunInfo) =>
     attempt(async () => {
       await api.stopRun(run.id);
@@ -131,6 +138,11 @@ export function TaskBoard({ projectId }: { projectId: number }) {
   const openSession = (t: Task) => {
     if (!t.sessionId) return;
     chat.openSession(projectId, t.sessionId, t.id).catch(() => {});
+    navigate({ name: "project", id: projectId, tab: "chat" });
+  };
+  // The review agent's session, which isn't the task's own.
+  const openReviewerSession = (sessionId: string) => {
+    chat.openSession(projectId, sessionId).catch(() => {});
     navigate({ name: "project", id: projectId, tab: "chat" });
   };
 
@@ -243,6 +255,10 @@ export function TaskBoard({ projectId }: { projectId: number }) {
                       onRevisePlan={(feedback) => replyToPlan.mutate({ id: t.id, approve: false, text: feedback })}
                       onDelete={() => remove.mutate(t.id)}
                       run={activeRunForTask(runs, t.id)}
+                      reviewerRun={activeReviewerRun(runs, t.id)}
+                      board={tasks.data ?? []}
+                      onRunReviewer={() => runReviewer(t.id)}
+                      onOpenReviewerSession={openReviewerSession}
                       usage={usageByTask.get(t.id)}
                       changes={t.review ? changesByTask.get(t.id) : undefined}
                       onReview={() => setReviewing(t.id)}
@@ -292,6 +308,10 @@ function TaskCard({
   onRevisePlan,
   onDelete,
   run,
+  reviewerRun,
+  board,
+  onRunReviewer,
+  onOpenReviewerSession,
   usage,
   changes,
   onReview,
@@ -317,6 +337,10 @@ function TaskCard({
   onRevisePlan: (feedback: string) => void;
   onDelete: () => void;
   run?: RunInfo;
+  reviewerRun?: RunInfo;
+  board: Task[];
+  onRunReviewer: () => void;
+  onOpenReviewerSession: (sessionId: string) => void;
   usage?: UsageTotals;
   changes?: ChangeSummary;
   onReview: () => void;
@@ -341,6 +365,13 @@ function TaskCard({
     !done && !run && { label: planning ? "Start planning" : "Start Claude session", icon: <Play size={14} />, onSelect: onStart },
     !done && !run && !!t.sessionId && { label: "Resume session", icon: <StepForward size={14} />, onSelect: onResume },
     run && { label: "Stop run", icon: <Square size={13} />, onSelect: () => onStop(run) },
+    reviewerRun && { label: "Watch the review agent", icon: <ScanSearch size={14} />, onSelect: () => onOpenRun(reviewerRun) },
+    done && !reviewerRun && {
+      label: t.reviewer ? "Review again" : "Run review agent",
+      icon: <ScanSearch size={14} />,
+      hint: "review + follow-ups",
+      onSelect: onRunReviewer,
+    },
     changes && !run && {
       label: changes.branch ? `Review branch (${changes.files})` : `Review changes (${changes.files})`,
       icon: changes.branch ? <GitBranch size={14} /> : <FileDiff size={14} />,
@@ -452,6 +483,11 @@ function TaskCard({
               PLAN
             </button>
           )}
+          {t.origin && (
+            <span className="text-violet-300/80" title={`Suggested by the review of "${t.origin.title}"`}>
+              <Sparkles size={10} />
+            </span>
+          )}
           {t.scheduleId && (
             <span className="text-slate-500" title="Added by a recurring task">
               <Repeat size={10} />
@@ -530,6 +566,16 @@ function TaskCard({
           onOpenRun={onOpenRun}
           onOpenSession={onOpenSession}
         />
+        {done && (
+          <ReviewerStrip
+            task={t}
+            run={reviewerRun}
+            board={board}
+            onOpenRun={onOpenRun}
+            onOpenSession={onOpenReviewerSession}
+            onRetry={onRunReviewer}
+          />
+        )}
         {changes && !run && (
           <Strip
             tone={done ? "accent" : "muted"}

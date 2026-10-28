@@ -174,7 +174,8 @@ export const chat = {
     fresh(projectId, {
       sessionId: run.sessionId,
       sessionTitle: run.title,
-      taskId: run.taskId,
+      // The review agent's session isn't the task's own; replies there don't move the card.
+      taskId: run.role ? undefined : run.taskId,
       permissionMode: run.permissionMode,
       model: run.model ?? "",
     });

@@ -78,7 +78,19 @@ export function useNotifications(projects: ProjectSummary[]) {
       if (!before || !active(before) || active(r.status) || r.status === "stopped" || !away()) continue;
       const failed = r.status === "failed";
       sendNotification(
-        `${name(r.projectId)}: ${r.taskId ? (failed ? "task run failed" : "Claude finished a task") : failed ? "chat failed" : "Claude replied"}`,
+        `${name(r.projectId)}: ${
+          r.role === "reviewer"
+            ? failed
+              ? "review agent failed"
+              : "review agent finished"
+            : r.taskId
+              ? failed
+                ? "task run failed"
+                : "Claude finished a task"
+              : failed
+                ? "chat failed"
+                : "Claude replied"
+        }`,
         r.title,
         go({ name: "project", id: r.projectId, tab: r.taskId ? "tasks" : "chat" }),
         r.id,

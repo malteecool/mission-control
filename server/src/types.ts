@@ -35,6 +35,33 @@ export interface Task {
   worktree?: TaskWorktree;
   /** The recurring schedule that put this task on the board. */
   scheduleId?: string;
+  /** The review agent's look at this task after it reached Done (projects with autoReview, or started by hand). */
+  reviewer?: ReviewerReport;
+  /** The finished task whose review suggested this one. */
+  origin?: { taskId: string; title: string };
+}
+
+/** What the review agent made of a finished task: a quick code review, plus follow-up tasks it put in To do. */
+export interface ReviewerReport {
+  status: "running" | "done" | "failed";
+  runId?: string;
+  sessionId?: string;
+  startedAt: string;
+  finishedAt?: string;
+  /** "good": nothing worth stopping for; "concerns": see findings. */
+  verdict?: "good" | "concerns";
+  summary?: string;
+  findings?: ReviewerFinding[];
+  /** Ids of the tasks it added to To do. */
+  followUps?: string[];
+  error?: string;
+}
+
+export interface ReviewerFinding {
+  severity: "high" | "medium" | "low";
+  text: string;
+  /** "path" or "path:line". */
+  file?: string;
 }
 
 /** A checkout of the project on its own branch, under <project>/.claude/worktrees/, where one task's sessions work. */
@@ -199,6 +226,8 @@ export interface Project {
   autoPermissionMode: PermissionMode;
   /** Give each task its own git worktree and branch so several run at once, instead of one at a time in the folder. */
   parallelTasks: boolean;
+  /** When a task reaches Done, run the review agent on it: a quick code review that can add follow-up tasks. */
+  autoReview: boolean;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
@@ -209,6 +238,8 @@ export interface RunInfo {
   projectId: number;
   /** Set for runs working on a task. */
   taskId?: string;
+  /** "reviewer": the review agent looking over a finished task, not work on the task itself. */
+  role?: "reviewer";
   sessionId?: string;
   title: string;
   status: RunStatus;

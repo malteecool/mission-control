@@ -91,6 +91,12 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   other task. If the task from last time isn't done yet, that time is skipped. **Run now** adds one straight away.
   Schedules are kept in the dashboard's database, not the project folder; one that came round while the dashboard was
   closed runs once when it starts again.
+- **Review agent (per-project setting, "Review finished tasks"):** when a task reaches *Done*, a read-only Claude
+  session looks over its changes (it can read files and run read-only git commands, nothing else), puts a short
+  verdict and its findings on the card, and adds up to 3 follow-up tasks (bugs, loose ends, next improvements) to
+  *To do*, marked with a sparkle and linked to the task they came from. Follow-ups of follow-ups get fewer
+  suggestions, so the chain stops on its own. Follow-ups aren't started for you. One review runs at a time per
+  project. **Run review agent** in a done card's right-click menu runs it by hand, also in projects with the setting off.
 - **Runs live on the server,** so chats and task sessions keep going when you navigate away or reload. Cards and
   the chat show what's running; open one to watch it or answer approvals.
 - **Chat** runs `claude -p --output-format stream-json` in the project folder, using your normal Claude login.
