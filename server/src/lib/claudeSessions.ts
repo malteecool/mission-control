@@ -86,6 +86,29 @@ async function readChunk(file: string, from: "head" | "tail", bytes: number): Pr
   }
 }
 
+type JsonlFile = { file: string; id: string; mtime: Date; size: number };
+
+const activityCache = new Map<string, { mtimeMs: number; size: number; at: Date }>();
+
+/** When the session last had a message. Not the file's mtime: Claude Code appends title and mode entries to old
+ *  sessions (e.g. when they're listed for /resume), which would make a months-old session look fresh. */
+async function lastMessageAt(f: JsonlFile): Promise<Date> {
+  const hit = activityCache.get(f.file);
+  if (hit && hit.mtimeMs === f.mtime.getTime() && hit.size === f.size) return hit.at;
+  let newest = 0;
+  // The last lines can be one huge tool result, so look further back if the first read finds no timestamp.
+  for (const bytes of [64 * 1024, 2 * 1024 * 1024]) {
+    for (const e of await readChunk(f.file, "tail", bytes)) {
+      const t = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
+      if (t > newest) newest = t;
+    }
+    if (newest || bytes >= f.size) break;
+  }
+  const at = newest && newest < f.mtime.getTime() ? new Date(newest) : f.mtime;
+  activityCache.set(f.file, { mtimeMs: f.mtime.getTime(), size: f.size, at });
+  return at;
+}
+
 /** Text of a real human prompt, or null for tool results, meta entries and slash-command plumbing. */
 function userPromptText(entry: any): string | null {
   if (entry?.type !== "user" || entry.isMeta || entry.isSidechain) return null;
@@ -145,7 +168,7 @@ export async function listSessions(projectPath: string): Promise<SessionSummary[
         firstPrompt: oneLine(firstPrompt ?? lastPrompt ?? ""),
         lastPrompt: lastPrompt ? oneLine(lastPrompt) : undefined,
         createdAt,
-        updatedAt: f.mtime.toISOString(),
+        updatedAt: (await lastMessageAt(f)).toISOString(),
         sizeBytes: f.size,
         gitBranch,
         worktree: worktree ? (cwd ? path.basename(cwd) : worktree) : undefined,
@@ -163,7 +186,7 @@ export async function lastSessionAt(projectPath: string): Promise<string | undef
   if (hit && Date.now() - hit.at < 15_000) return hit.value;
   let newest = 0;
   for (const { dir } of await sessionDirsFor(projectPath)) {
-    for (const f of await listJsonl(dir)) newest = Math.max(newest, f.mtime.getTime());
+    for (const f of await listJsonl(dir)) newest = Math.max(newest, (await lastMessageAt(f)).getTime());
   }
   const value = newest ? new Date(newest).toISOString() : undefined;
   lastActivityCache.set(projectPath, { at: Date.now(), value });
@@ -378,7 +401,7 @@ export async function searchSessions(projectPath: string, query: string, limit =
     const best = [...matches].sort((a, b) => b.score - a.score).slice(0, 3);
     out.push({
       sessionId: f.id,
-      updatedAt: f.mtime.toISOString(),
+      updatedAt: (await lastMessageAt(f)).toISOString(),
       hits: matches.length,
       score: best.reduce((sum, m) => sum + m.score, 0) + Math.log10(1 + matches.length),
       matches: best.map(({ e }) => ({ itemId: e.id, kind: e.kind, text: snippet(e.text, e.lower, terms), ts: e.ts })),
@@ -507,7 +530,9 @@ export async function discoverProjects(): Promise<DiscoveredProject[]> {
       continue;
     if (encodePath(cwd).toLowerCase() !== name.toLowerCase()) continue; // a session that cd'ed elsewhere
     const existing = byPath.get(lower);
-    const lastActiveAt = files[0].mtime.toISOString();
+    let newest = 0;
+    for (const f of files) newest = Math.max(newest, (await lastMessageAt(f)).getTime());
+    const lastActiveAt = new Date(newest).toISOString();
     if (existing) {
       existing.sessionCount += files.length;
       if (lastActiveAt > existing.lastActiveAt) existing.lastActiveAt = lastActiveAt;
