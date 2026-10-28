@@ -50,13 +50,15 @@ async function listJsonl(dir: string): Promise<Array<{ file: string; id: string;
     return [];
   }
   const files = names.filter((n) => n.endsWith(".jsonl") && SESSION_ID_RE.test(n.slice(0, -6)));
-  return Promise.all(
+  const stats = await Promise.all(
     files.map(async (n) => {
       const file = path.join(dir, n);
-      const st = await fsp.stat(file);
-      return { file, id: n.slice(0, -6), mtime: st.mtime, size: st.size };
+      // The file can be deleted between readdir and stat (e.g. Claude Code's session cleanup).
+      const st = await fsp.stat(file).catch(() => null);
+      return st && { file, id: n.slice(0, -6), mtime: st.mtime, size: st.size };
     }),
   );
+  return stats.filter((s) => s !== null);
 }
 
 async function readChunk(file: string, from: "head" | "tail", bytes: number): Promise<any[]> {
@@ -88,23 +90,29 @@ async function readChunk(file: string, from: "head" | "tail", bytes: number): Pr
 
 type JsonlFile = { file: string; id: string; mtime: Date; size: number };
 
-const activityCache = new Map<string, { mtimeMs: number; size: number; at: Date }>();
+const activityCache = new Map<string, { mtimeMs: number; size: number; at: Date | undefined }>();
 
-/** When the session last had a message. Not the file's mtime: Claude Code appends title and mode entries to old
- *  sessions (e.g. when they're listed for /resume), which would make a months-old session look fresh. */
-async function lastMessageAt(f: JsonlFile): Promise<Date> {
+/** When the session last had a message, or undefined if no message timestamp was found (metadata-only files) or
+ *  the file couldn't be read (e.g. deleted since it was listed). Not the file's mtime: Claude Code appends title
+ *  and mode entries to old sessions (e.g. when they're listed for /resume), which would make a months-old session
+ *  look fresh. */
+async function lastMessageAt(f: JsonlFile): Promise<Date | undefined> {
   const hit = activityCache.get(f.file);
   if (hit && hit.mtimeMs === f.mtime.getTime() && hit.size === f.size) return hit.at;
   let newest = 0;
-  // The last lines can be one huge tool result, so look further back if the first read finds no timestamp.
-  for (const bytes of [64 * 1024, 2 * 1024 * 1024]) {
-    for (const e of await readChunk(f.file, "tail", bytes)) {
-      const t = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
-      if (t > newest) newest = t;
+  try {
+    // The last lines can be one huge tool result, so look further back if the first read finds no timestamp.
+    for (const bytes of [64 * 1024, 2 * 1024 * 1024]) {
+      for (const e of await readChunk(f.file, "tail", bytes)) {
+        const t = typeof e.timestamp === "string" ? Date.parse(e.timestamp) : NaN;
+        if (t > newest) newest = t;
+      }
+      if (newest || bytes >= f.size) break;
     }
-    if (newest || bytes >= f.size) break;
+  } catch {
+    return undefined;
   }
-  const at = newest && newest < f.mtime.getTime() ? new Date(newest) : f.mtime;
+  const at = newest ? new Date(Math.min(newest, f.mtime.getTime())) : undefined;
   activityCache.set(f.file, { mtimeMs: f.mtime.getTime(), size: f.size, at });
   return at;
 }
@@ -168,7 +176,7 @@ export async function listSessions(projectPath: string): Promise<SessionSummary[
         firstPrompt: oneLine(firstPrompt ?? lastPrompt ?? ""),
         lastPrompt: lastPrompt ? oneLine(lastPrompt) : undefined,
         createdAt,
-        updatedAt: (await lastMessageAt(f)).toISOString(),
+        updatedAt: ((await lastMessageAt(f)) ?? f.mtime).toISOString(),
         sizeBytes: f.size,
         gitBranch,
         worktree: worktree ? (cwd ? path.basename(cwd) : worktree) : undefined,
@@ -186,7 +194,7 @@ export async function lastSessionAt(projectPath: string): Promise<string | undef
   if (hit && Date.now() - hit.at < 15_000) return hit.value;
   let newest = 0;
   for (const { dir } of await sessionDirsFor(projectPath)) {
-    for (const f of await listJsonl(dir)) newest = Math.max(newest, (await lastMessageAt(f)).getTime());
+    for (const f of await listJsonl(dir)) newest = Math.max(newest, (await lastMessageAt(f))?.getTime() ?? 0);
   }
   const value = newest ? new Date(newest).toISOString() : undefined;
   lastActivityCache.set(projectPath, { at: Date.now(), value });
@@ -401,7 +409,7 @@ export async function searchSessions(projectPath: string, query: string, limit =
     const best = [...matches].sort((a, b) => b.score - a.score).slice(0, 3);
     out.push({
       sessionId: f.id,
-      updatedAt: (await lastMessageAt(f)).toISOString(),
+      updatedAt: ((await lastMessageAt(f)) ?? f.mtime).toISOString(),
       hits: matches.length,
       score: best.reduce((sum, m) => sum + m.score, 0) + Math.log10(1 + matches.length),
       matches: best.map(({ e }) => ({ itemId: e.id, kind: e.kind, text: snippet(e.text, e.lower, terms), ts: e.ts })),
@@ -531,7 +539,8 @@ export async function discoverProjects(): Promise<DiscoveredProject[]> {
     if (encodePath(cwd).toLowerCase() !== name.toLowerCase()) continue; // a session that cd'ed elsewhere
     const existing = byPath.get(lower);
     let newest = 0;
-    for (const f of files) newest = Math.max(newest, (await lastMessageAt(f)).getTime());
+    for (const f of files) newest = Math.max(newest, (await lastMessageAt(f))?.getTime() ?? 0);
+    if (!newest) continue; // no file has a message, so nothing has really happened here
     const lastActiveAt = new Date(newest).toISOString();
     if (existing) {
       existing.sessionCount += files.length;
