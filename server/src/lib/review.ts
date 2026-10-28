@@ -389,7 +389,8 @@ export function mergeTask(project: Project, taskId: string, message: string) {
 
 /** The remote to push to (origin if there is one), and whether it's on GitHub. */
 async function remoteInfo(cwd: string): Promise<{ remote?: string; github?: boolean }> {
-  const names = (await git(cwd, ["remote"])).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  const names = (await git(cwd, ["remote"])).stdout.split("
+").map((s) => s.trim()).filter(Boolean);
   const remote = names.includes("origin") ? "origin" : names[0];
   if (!remote) return {};
   const url = (await git(cwd, ["remote", "get-url", remote])).stdout.trim();
@@ -458,7 +459,8 @@ function prBody(task: Task, base: string): string {
         ]
       : []),
     `Opened from the Mission Control task board (branch \`${task.worktree?.branch}\` into \`${base}\`).`,
-  ].join("\n");
+  ].join("
+");
 }
 
 /**
@@ -480,10 +482,11 @@ export function openPullRequest(project: Project, taskId: string, message: strin
     const created = await gh(main.root, [
       "pr", "create", "--head", wt.branch, "--base", base, "--title", (title || task.title).slice(0, 250), "--body-file", "-",
     ], { input: prBody(task, base) });
-    // gh prints the new PR's URL, or names the existing one when the branch already has a PR.
-    const url = /https:\/\/\S+\/pull\/\d+/.exec(`${created.stdout}\n${created.stderr}`)?.[0];
+    const out = `${created.stdout}
+${created.stderr}`;
+    const url = /https:\/\/\S+\/pull\/\d+/.exec(out)?.[0];
     if (!url) {
-      if (/ENOENT|is not recognized/i.test(created.stderr))
+      if (/not found|ENOENT|is not recognized/i.test(created.stderr))
         throw new ReviewError(409, "Pushed the branch, but the GitHub CLI (gh) isn't installed or isn't on PATH, so no pull request was opened.");
       throw new ReviewError(409, `Pushed the branch, but gh pr create failed: ${created.stderr.trim() || "unknown error"}`);
     }
