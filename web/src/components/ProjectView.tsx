@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { CheckSquare, CircleDollarSign, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, Trash2 } from "lucide-react";
+import { CheckSquare, CircleDollarSign, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, TerminalSquare, Trash2 } from "lucide-react";
 import { api, type PermissionMode } from "../lib/api.ts";
 import { href, navigate, type Route, type Tab } from "../lib/router.ts";
 import { activeRuns, useRuns } from "../lib/runs.ts";
@@ -12,6 +12,7 @@ import { TaskBoard } from "./TaskBoard.tsx";
 import { ChatPanel } from "./ChatPanel.tsx";
 import { HistoryPanel } from "./HistoryPanel.tsx";
 import { UsagePanel } from "./UsagePanel.tsx";
+import { DevPanel } from "./DevPanel.tsx";
 
 const COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#fb7185", "#2dd4bf"];
 
@@ -21,6 +22,8 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
   const live = activeRuns(useRuns(), route.id);
   const waiting = live.flatMap((r) => r.permissions);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // For the Dev tab's badge; the Dev tab itself follows the server live and refreshes this.
+  const dev = useQuery({ queryKey: ["dev", route.id], queryFn: () => api.devServer(route.id), refetchInterval: 15_000 });
 
   const update = useMutation({
     mutationFn: (body: Parameters<typeof api.updateProject>[1]) => api.updateProject(route.id, body),
@@ -54,6 +57,12 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
           : undefined,
     },
     { id: "history", label: "History", icon: <History size={14} /> },
+    {
+      id: "dev",
+      label: "Dev",
+      icon: <TerminalSquare size={14} />,
+      badge: dev.data?.status === "running" ? "on" : dev.data?.status === "crashed" ? "crashed" : undefined,
+    },
     { id: "usage", label: "Usage", icon: <CircleDollarSign size={14} /> },
   ];
 
@@ -113,11 +122,13 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
                 <span
                   className={clsx(
                     "rounded-full px-1.5 font-mono text-[10px]",
-                    t.badge === "approve" || t.badge === "answer"
-                      ? "animate-pulse bg-amber-400 text-slate-950"
-                      : t.badge === "live"
-                        ? "animate-pulse bg-[var(--accent)] text-slate-950"
-                        : "bg-white/10 text-slate-300",
+                    t.badge === "crashed"
+                      ? "bg-rose-500/80 text-white"
+                      : t.badge === "approve" || t.badge === "answer"
+                        ? "animate-pulse bg-amber-400 text-slate-950"
+                        : t.badge === "live" || t.badge === "on"
+                          ? "animate-pulse bg-[var(--accent)] text-slate-950"
+                          : "bg-white/10 text-slate-300",
                   )}
                 >
                   {t.badge}
@@ -137,6 +148,7 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
       <div className="min-h-0 flex-1">
         {p.exists && route.tab === "tasks" && <TaskBoard projectId={p.id} />}
         {p.exists && route.tab === "chat" && <ChatPanel projectId={p.id} />}
+        {p.exists && route.tab === "dev" && <DevPanel projectId={p.id} />}
         {route.tab === "history" && <HistoryPanel projectId={p.id} sessionId={route.sessionId} />}
         {route.tab === "usage" && (
           <div className="mx-auto max-w-5xl p-6">

@@ -31,6 +31,7 @@ import { finishTaskTurn, startTaskRun, stopTaskRun, taskForSession } from "./lib
 import { ReviewError, changeSummaries, commitChanges, dismissReview, revertChanges, taskChanges } from "./lib/review.ts";
 import { watchTasksStream } from "./lib/taskWatcher.ts";
 import { usageReport } from "./lib/usage.ts";
+import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopDevServer } from "./lib/devServers.ts";
 import type {
   ChatRequest,
   DesktopStatus,
@@ -180,6 +181,55 @@ app.post("/api/projects/:id/open", async (c) => {
       });
     }
   });
+  return c.body(null, 204);
+});
+
+// ── Dev server ──────────────────────────────────────────────────────────────
+
+app.get("/api/dev", (c) => c.json(listDevServers()));
+
+app.get("/api/projects/:id/dev", (c) => {
+  const p = projectOr404(c.req.param("id"));
+  return c.json(devServerInfo(p.id, p.path));
+});
+
+// Status, then the kept output and each new line, as NDJSON.
+app.get("/api/projects/:id/dev/logs", (c) => {
+  const stream = devLogStream(projectOr404(c.req.param("id")).id);
+  return new Response(stream, {
+    headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" },
+  });
+});
+
+// `{ "script": "dev" }`: must be one of the project's package.json scripts.
+app.post("/api/projects/:id/dev/start", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  const body = (await c.req.json().catch(() => ({}))) as { script?: unknown };
+  if (typeof body.script !== "string" || !body.script) throw new HttpError(400, "script is required");
+  try {
+    return c.json(startDevServer(p.id, p.path, body.script), 201);
+  } catch (err) {
+    throw new HttpError(409, (err as Error).message);
+  }
+});
+
+app.post("/api/projects/:id/dev/stop", (c) => c.json({ stopped: stopDevServer(projectOr404(c.req.param("id")).id) }));
+
+app.delete("/api/projects/:id/dev/logs", (c) => {
+  clearDevLogs(projectOr404(c.req.param("id")).id);
+  return c.body(null, 204);
+});
+
+// Opens the URL the dev server printed in the default browser (the desktop window doesn't open new tabs itself).
+// Only that detected localhost URL is opened, never anything from the request.
+app.post("/api/projects/:id/dev/open", (c) => {
+  const p = projectOr404(c.req.param("id"));
+  const url = devServerInfo(p.id, p.path).url;
+  if (!url) throw new HttpError(409, "The dev server hasn't printed a URL yet");
+  const [command, args]: [string, string[]] =
+    process.platform === "win32" ? ["explorer.exe", [url]] : [process.platform === "darwin" ? "open" : "xdg-open", [url]];
+  spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true }).on("error", () => {}).unref();
   return c.body(null, 204);
 });
 

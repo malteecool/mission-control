@@ -13,6 +13,8 @@ import type {
   Settings,
   ClaudeInfo,
   DesktopStatus,
+  DevServerInfo,
+  DevServerStatus,
   Task,
   TaskChanges,
   UsageReport,
@@ -75,6 +77,13 @@ export const api = {
   searchSessions: (id: number, q: string) =>
     request<SessionSearchHit[]>("GET", `/api/projects/${id}/sessions/search?q=${encodeURIComponent(q)}`),
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),
+
+  devServer: (id: number) => request<DevServerInfo>("GET", `/api/projects/${id}/dev`),
+  devServers: () => request<DevServerStatus[]>("GET", "/api/dev"),
+  startDevServer: (id: number, script: string) => request<DevServerStatus>("POST", `/api/projects/${id}/dev/start`, { script }),
+  stopDevServer: (id: number) => request<{ stopped: boolean }>("POST", `/api/projects/${id}/dev/stop`),
+  clearDevLogs: (id: number) => request<void>("DELETE", `/api/projects/${id}/dev/logs`),
+  openDevPreview: (id: number) => request<void>("POST", `/api/projects/${id}/dev/open`),
 
   overview: () => request<Overview>("GET", "/api/overview"),
   health: () => request<ProjectHealth[]>("GET", "/api/health"),

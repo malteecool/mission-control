@@ -1,12 +1,12 @@
 import { useSyncExternalStore } from "react";
 
-export type Tab = "tasks" | "chat" | "history" | "usage";
+export type Tab = "tasks" | "chat" | "history" | "dev" | "usage";
 export type Route =
   | { name: "overview" }
   | { name: "settings" }
   | { name: "project"; id: number; tab: Tab; sessionId?: string };
 
-const TABS: Tab[] = ["tasks", "chat", "history", "usage"];
+const TABS: Tab[] = ["tasks", "chat", "history", "dev", "usage"];
 
 function parse(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);

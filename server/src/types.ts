@@ -164,6 +164,35 @@ export interface RunInfo {
   error?: string;
 }
 
+export type DevStatus = "running" | "stopped" | "crashed";
+
+/** A project's dev command (`npm run dev` etc.) started from the dashboard. */
+export interface DevServerStatus {
+  projectId: number;
+  status: DevStatus;
+  script?: string;
+  command?: string;
+  pid?: number;
+  /** The first local URL the command printed, for the "Open preview" link. */
+  url?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+}
+
+export interface DevServerInfo extends DevServerStatus {
+  packageManager: string;
+  /** package.json scripts, the likely dev command first. */
+  scripts: Array<{ name: string; command: string }>;
+}
+
+export interface DevLogLine {
+  seq: number;
+  stream: "stdout" | "stderr" | "system";
+  text: string;
+  ts: string;
+}
+
 export interface ProjectSummary extends Project {
   exists: boolean;
   git: GitInfo;
