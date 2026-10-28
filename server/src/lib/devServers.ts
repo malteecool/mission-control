@@ -26,6 +26,11 @@ interface DevServer {
    * watched by polling since there's no child process to hear from.
    */
   adopted?: number[];
+  /**
+   * When each adopted PID started (Windows), written down with it so the next restart can still find them: by then the
+   * root PID is long dead and may belong to something else, so its children can no longer be told from strangers.
+   */
+  adoptedStarted?: Map<number, number>;
   tails?: Tail[];
   logs: DevLogLine[];
   nextSeq: number;
@@ -239,6 +244,7 @@ export function startDevServer(projectId: number, dir: string, script: string): 
   }
   s.child = child;
   s.adopted = undefined;
+  s.adoptedStarted = undefined;
   s.tails = [newTail(s, "stdout"), newTail(s, "stderr")];
   s.info.pid = child.pid;
   saveRunning();
@@ -297,7 +303,7 @@ export function stopDevServer(projectId: number): boolean {
   else if (process.platform !== "win32") killGroup(s.adopted![0]);
   else {
     // Look again rather than trusting the PIDs from the restart: one may have exited and been reused since.
-    const pids = s.info.pid && s.info.startedAt ? leftoverTree(processTable(), s.info.pid, Date.parse(s.info.startedAt)) : s.adopted!;
+    const pids = s.info.pid && s.info.startedAt ? leftoverTrees(processTable(), s.info.pid, Date.parse(s.info.startedAt), survivors(s)) : s.adopted!;
     for (const pid of pids) killTree(pid);
   }
   return true;
@@ -325,9 +331,14 @@ function isAlive(pid: number): boolean {
 function checkAdopted(s: DevServer) {
   if (!s.adopted) return;
   // Windows: drop PIDs as they exit, so one reused later doesn't count. Unix: the group lives while any member does.
+  const before = s.adopted.length;
   s.adopted = process.platform === "win32" ? s.adopted.filter(isAlive) : s.adopted.filter((g) => isAlive(-g));
-  if (s.adopted.length) return;
+  if (s.adopted.length) {
+    if (s.adopted.length !== before) saveRunning(); // Keep the written-down survivors to the ones still running.
+    return;
+  }
   s.adopted = undefined;
+  s.adoptedStarted = undefined;
   finishTails(s);
   saveRunning();
   s.info = { ...s.info, status: "stopped", finishedAt: new Date().toISOString(), pid: undefined };
@@ -356,11 +367,26 @@ interface RunningRecord {
   script?: string;
   /** Its output goes to log files (so it can be reattached). Older records are of dev servers whose output went to pipes. */
   logged?: boolean;
+  /**
+   * The processes it was reattached to and when each started, ms since epoch (Windows). Set once it has been through a
+   * restart, when the root `pid` is usually gone: if that PID is reused, the survivors can only be found by these.
+   */
+  survivors?: { pid: number; started: number }[];
+}
+
+/** The adopted PIDs of a reattached dev server with their start times (Windows). */
+function survivors(s: DevServer): { pid: number; started: number }[] | undefined {
+  if (!s.adopted || !s.adoptedStarted) return undefined;
+  const list = s.adopted.flatMap((pid) => {
+    const started = s.adoptedStarted!.get(pid);
+    return started === undefined ? [] : [{ pid, started }];
+  });
+  return list.length ? list : undefined;
 }
 
 function saveRunning(records = [...servers.values()].flatMap((s): RunningRecord[] =>
   (s.child || s.adopted) && s.info.pid && s.info.startedAt
-    ? [{ projectId: s.info.projectId, pid: s.info.pid, startedAt: s.info.startedAt, command: s.info.command, script: s.info.script, logged: true }]
+    ? [{ projectId: s.info.projectId, pid: s.info.pid, startedAt: s.info.startedAt, command: s.info.command, script: s.info.script, logged: true, survivors: s.child ? undefined : survivors(s) }]
     : [],
 )) {
   try {
@@ -468,6 +494,22 @@ function leftoverTree(table: ProcessEntry[], root: number, startedAt: number): n
 }
 
 /**
+ * Like leftoverTree, but also following the `survivors` written down after an earlier restart (Windows): each one still
+ * running with the same start time, and everything it has started since. The root's children alone stop being enough
+ * once the root PID is reused, since leftoverTree then can't tell its PID from a stranger's.
+ */
+function leftoverTrees(table: ProcessEntry[], root: number, startedAt: number, survivors: { pid: number; started: number }[] | undefined): number[] {
+  const found = new Set(leftoverTree(table, root, startedAt));
+  const byPid = new Map(table.map((p) => [p.pid, p]));
+  for (const sv of survivors ?? []) {
+    const live = byPid.get(sv.pid);
+    if (!live || Math.abs(live.started - sv.started) > SLACK) continue; // Exited, and maybe reused since.
+    for (const pid of leftoverTree(table, sv.pid, sv.started)) found.add(pid);
+  }
+  return [...found];
+}
+
+/**
  * Whether the process group of a dev server started as `leader` at `startedAt` still has members (Unix). It was
  * spawned detached, so the group ID is the leader's PID, and the group outlives the leader: orphaned members are
  * reparented to init, so they can't be found by parent PID, but they keep the group ID. A PID isn't reused while a
@@ -479,7 +521,7 @@ function leftoverGroup(table: GroupEntry[], leader: number, startedAt: number): 
 }
 
 /** A dev server written down by the previous dashboard process, reattached if it's still running. */
-function leftoverServer(r: RunningRecord, live: number[] | undefined): DevServer {
+function leftoverServer(r: RunningRecord, live: number[] | undefined, started?: Map<number, number>): DevServer {
   const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
   s.info = { projectId: r.projectId, status: live ? "running" : "stopped", script: r.script, command: r.command, startedAt: r.startedAt };
   servers.set(r.projectId, s);
@@ -490,6 +532,7 @@ function leftoverServer(r: RunningRecord, live: number[] | undefined): DevServer
   if (live) {
     s.info.pid = r.pid;
     s.adopted = live;
+    s.adoptedStarted = started;
     s.tails = [newTail(s, "stdout", outEnd), newTail(s, "stderr", errEnd)];
     push(s, "system", `Reattached after the dashboard restarted (pid ${r.pid}).`);
   } else {
@@ -515,12 +558,16 @@ function adoptLeftovers() {
   const table = windows ? processTable() : [];
   const groups = windows ? [] : processGroups();
   if (!groups) return; // Keep the records so the next start can try again.
+  const startedByPid = new Map(table.map((p) => [p.pid, p.started]));
   for (const r of records) {
     const startedAt = Date.parse(r.startedAt);
-    // Windows: each surviving branch, whose root may be gone. Unix: its own process group, which outlives its leader.
-    const pids = windows ? leftoverTree(table, r.pid, startedAt) : leftoverGroup(groups, r.pid, startedAt) ? [r.pid] : [];
+    // Windows: each surviving branch, whose root may be gone, plus whatever survived the restarts before this one. Unix:
+    // its own process group, which outlives its leader.
+    const pids = windows
+      ? leftoverTrees(table, r.pid, startedAt, Array.isArray(r.survivors) ? r.survivors : undefined)
+      : leftoverGroup(groups, r.pid, startedAt) ? [r.pid] : [];
     if (r.logged) {
-      leftoverServer(r, pids.length ? pids : undefined);
+      leftoverServer(r, pids.length ? pids : undefined, windows ? new Map(pids.map((pid) => [pid, startedByPid.get(pid)!])) : undefined);
       continue;
     }
     // From before dev servers logged to files: its output went to pipes that died with the old process, so it
