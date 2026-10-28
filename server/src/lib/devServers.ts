@@ -171,6 +171,15 @@ function killTree(pid: number | undefined) {
   }
 }
 
+/** Stops a whole process group (Unix), even when its leader is gone. */
+function killGroup(pgid: number) {
+  try {
+    process.kill(-pgid, "SIGTERM");
+  } catch {
+    // Already gone.
+  }
+}
+
 export function stopDevServer(projectId: number): boolean {
   const s = servers.get(projectId);
   if (!s?.child) return false;
@@ -219,22 +228,42 @@ interface ProcessEntry {
   started: number;
 }
 
-/** Every running process with its parent and start time. */
+/** Every running process with its parent and start time (Windows). */
 function processTable(): ProcessEntry[] {
   const table: ProcessEntry[] = [];
-  if (process.platform === "win32") {
-    const script = `Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`;
-    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
-    for (const line of (r.stdout ?? "").split(/\r?\n/)) {
-      const [pid, ppid, iso] = line.trim().split(" ");
-      if (pid && ppid && iso) table.push({ pid: Number(pid), ppid: Number(ppid), started: Date.parse(iso) });
-    }
-  } else {
-    const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,etimes="], { encoding: "utf8", timeout: 20_000 });
-    for (const line of (r.stdout ?? "").split("\n")) {
-      const [pid, ppid, elapsed] = line.trim().split(/\s+/);
-      if (pid && ppid && elapsed) table.push({ pid: Number(pid), ppid: Number(ppid), started: Date.now() - Number(elapsed) * 1000 });
-    }
+  const script = `Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`;
+  const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+  for (const line of (r.stdout ?? "").split(/\r?\n/)) {
+    const [pid, ppid, iso] = line.trim().split(" ");
+    if (pid && ppid && iso) table.push({ pid: Number(pid), ppid: Number(ppid), started: Date.parse(iso) });
+  }
+  return table;
+}
+
+interface GroupEntry {
+  pid: number;
+  pgid: number;
+  /** When it started, ms since epoch. */
+  started: number;
+}
+
+/** Seconds from ps's `etime` ("[[dd-]hh:]mm:ss"), which unlike Linux's `etimes` macOS and the BSDs have too. */
+function parseEtime(etime: string): number {
+  const m = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(etime);
+  if (!m) return NaN;
+  const [, days, hours, minutes, seconds] = m;
+  return ((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60 + Number(minutes)) * 60 + Number(seconds);
+}
+
+/** Every running process with its process group and start time (Unix). */
+function processGroups(): GroupEntry[] {
+  const r = spawnSync("ps", ["-A", "-o", "pid=,pgid=,etime="], { encoding: "utf8", timeout: 20_000 });
+  const now = Date.now();
+  const table: GroupEntry[] = [];
+  for (const line of (r.stdout ?? "").split("\n")) {
+    const [pid, pgid, etime] = line.trim().split(/\s+/);
+    const elapsed = parseEtime(etime ?? "");
+    if (pid && pgid && !Number.isNaN(elapsed)) table.push({ pid: Number(pid), pgid: Number(pgid), started: now - elapsed * 1000 });
   }
   return table;
 }
@@ -258,20 +287,21 @@ function bootTime(): number | undefined {
   return sec > 0 ? sec * 1000 : undefined;
 }
 
+const SLACK = 10_000; // Clock and timestamp rounding between our record and the OS.
+const CHILD_WINDOW = 60_000; // How soon after the dev command its direct children start.
+
 /**
- * The processes still running from a dev server started as `root` at `startedAt`. The root itself is often gone
+ * The processes still running from a dev server started as `root` at `startedAt` (Windows). The root itself is often gone
  * (on Windows the outer cmd.exe dies with us while npm's children live on), but Windows keeps each process's parent
  * PID after the parent exits, so the rest can still be found. Start times guard against reused PIDs: the root must
  * have started when ours did, every descendant after its parent, and, when the root is gone, its direct children
  * within a minute of it (anything later is more likely a stranger that inherited the PID as its parent).
  */
 function leftoverTree(table: ProcessEntry[], root: number, startedAt: number): number[] {
-  const SLACK = 10_000; // Clock and timestamp rounding between our record and the OS.
   const byPid = new Map(table.map((p) => [p.pid, p]));
   const live = byPid.get(root);
   if (live && Math.abs(live.started - startedAt) > SLACK) return []; // The PID belongs to something else now.
   const found: number[] = live ? [root] : [];
-  const CHILD_WINDOW = 60_000; // How soon after the dev command its direct children start.
   const queue = [{ pid: root, started: live?.started ?? startedAt }];
   while (queue.length) {
     const parent = queue.shift()!;
@@ -283,6 +313,17 @@ function leftoverTree(table: ProcessEntry[], root: number, startedAt: number): n
     }
   }
   return found;
+}
+
+/**
+ * Whether the process group of a dev server started as `leader` at `startedAt` still has members (Unix). It was
+ * spawned detached, so the group ID is the leader's PID, and the group outlives the leader: orphaned members are
+ * reparented to init, so they can't be found by parent PID, but they keep the group ID. A PID isn't reused while a
+ * group with that ID exists, so the group is ours if any member started around when the dev command did; one whose
+ * members all started later belongs to a process that got the PID after ours were all gone.
+ */
+function leftoverGroup(table: GroupEntry[], leader: number, startedAt: number): boolean {
+  return table.some((p) => p.pgid === leader && p.started >= startedAt - SLACK && p.started <= startedAt + CHILD_WINDOW);
 }
 
 function stopLeftovers() {
@@ -297,13 +338,21 @@ function stopLeftovers() {
   const booted = bootTime();
   if (booted !== undefined) records = records.filter((r) => Date.parse(r.startedAt) > booted);
   if (!records.length) return saveRunning([]);
-  const table = processTable();
+  const windows = process.platform === "win32";
+  const table = windows ? processTable() : [];
+  const groups = windows ? [] : processGroups();
   for (const r of records) {
-    const pids = leftoverTree(table, r.pid, Date.parse(r.startedAt));
-    if (!pids.length) continue;
-    // On Unix the dev server is its own process group, which outlives its leader; elsewhere kill each surviving branch.
-    if (process.platform === "win32") for (const pid of pids) killTree(pid);
-    else killTree(r.pid);
+    const startedAt = Date.parse(r.startedAt);
+    if (windows) {
+      // Kill each surviving branch; its root may be gone.
+      const pids = leftoverTree(table, r.pid, startedAt);
+      if (!pids.length) continue;
+      for (const pid of pids) killTree(pid);
+    } else {
+      // The dev server is its own process group, which outlives its leader.
+      if (!leftoverGroup(groups, r.pid, startedAt)) continue;
+      killGroup(r.pid);
+    }
     const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
     s.info = { projectId: r.projectId, status: "stopped", script: r.script, command: r.command, startedAt: r.startedAt, finishedAt: new Date().toISOString() };
     servers.set(r.projectId, s);
