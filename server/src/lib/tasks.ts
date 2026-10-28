@@ -56,7 +56,10 @@ async function writeTasks(projectPath: string, tasks: Task[]): Promise<void> {
 }
 
 export type TaskInput = Partial<
-  Pick<Task, "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review">
+  Pick<
+    Task,
+    "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review" | "planFirst" | "plan" | "planApproved"
+  >
 >;
 
 export function validateTaskInput(input: unknown, requireTitle: boolean): TaskInput | string {
@@ -87,6 +90,10 @@ export function validateTaskInput(input: unknown, requireTitle: boolean): TaskIn
     if (typeof i.sessionId !== "string") return "sessionId must be a string";
     out.sessionId = i.sessionId || undefined;
   }
+  if (i.planFirst !== undefined) {
+    if (typeof i.planFirst !== "boolean") return "planFirst must be a boolean";
+    out.planFirst = i.planFirst || undefined;
+  }
   return out;
 }
 
@@ -106,6 +113,7 @@ export function createTask(projectPath: string, input: TaskInput): Promise<Task>
       updatedAt: now,
       doneAt: status === "done" ? now : undefined,
       sessionId: input.sessionId,
+      planFirst: input.planFirst,
     };
     tasks.push(task);
     await writeTasks(projectPath, tasks);

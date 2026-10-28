@@ -25,6 +25,12 @@ export interface Task {
   agentNote?: string;
   /** Snapshots of the files around the task's sessions, so you can review what they changed. Cleared once reviewed. */
   review?: TaskReview;
+  /** Start Claude in plan mode; it builds only after you approve its plan on the card. */
+  planFirst?: boolean;
+  /** The plan Claude proposed for this task (with planFirst). */
+  plan?: string;
+  /** You approved `plan`; later runs build instead of planning. Cleared when planFirst is toggled. */
+  planApproved?: boolean;
 }
 
 /** Git tree objects recording the project's working tree (untracked files included) around a task's sessions. */

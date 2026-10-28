@@ -43,7 +43,12 @@ export function AgentStrip({
         </Strip>
       );
     return (
-      <Strip tone="accent" icon={<Sparkles size={11} />} text="Claude is working on this" scanning>
+      <Strip
+        tone="accent"
+        icon={<Sparkles size={11} />}
+        text={run.permissionMode === "plan" && t.planFirst && !t.planApproved ? "Claude is planning this" : "Claude is working on this"}
+        scanning
+      >
         <StripButton onClick={() => onOpenRun(run)}>
           <Eye size={11} /> Watch
         </StripButton>
@@ -64,6 +69,9 @@ export function AgentStrip({
         </StripButton>
       </Strip>
     );
+
+  // A plan waiting for approval: the card shows it with PlanReview.
+  if (t.status === "doing" && t.planFirst && t.plan && !t.planApproved && !t.agentStatus) return null;
 
   // Failed or stopped, or the session was cut off without an outcome (the server restarted mid-run):
   // continuing the same session keeps what Claude already knows and did.

@@ -47,6 +47,7 @@ export const api = {
   ) =>
     request<ProjectSummary>("PATCH", `/api/projects/${id}`, body),
   removeProject: (id: number) => request<void>("DELETE", `/api/projects/${id}`),
+  openProject: (id: number, app: "folder" | "editor") => request<void>("POST", `/api/projects/${id}/open`, { app }),
 
   tasks: (id: number) => request<Task[]>("GET", `/api/projects/${id}/tasks`),
   addTask: (id: number, body: Partial<Task>) => request<Task>("POST", `/api/projects/${id}/tasks`, body),
@@ -63,6 +64,10 @@ export const api = {
   dismissChanges: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}/changes`),
   askForChanges: (id: number, taskId: string, feedback: string) =>
     request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`, { feedback }),
+  approvePlan: (id: number, taskId: string, note?: string) =>
+    request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/plan`, { approve: true, note }),
+  revisePlan: (id: number, taskId: string, feedback: string) =>
+    request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/plan`, { approve: false, feedback }),
 
   sessions: (id: number) => request<SessionSummary[]>("GET", `/api/projects/${id}/sessions`),
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),

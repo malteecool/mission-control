@@ -71,6 +71,7 @@ interface Proc {
   pending: Map<string, PendingPermission>;
   permissionMode: PermissionMode;
   emit: (ev: ChatEvent) => void;
+  onPlan?: (plan: string) => void;
 }
 const procs = new Map<string, Proc>();
 
@@ -125,6 +126,11 @@ export interface LaunchOptions {
   sessionId?: string;
   model?: string;
   permissionMode: PermissionMode;
+  /**
+   * Takes the plan from Claude's ExitPlanMode call instead of asking you, and tells Claude to stop there
+   * (a plan-first task shows the plan on its card for approval).
+   */
+  onPlan?: (plan: string) => void;
 }
 
 /**
@@ -158,7 +164,7 @@ export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: Chat
 
   const { command, shell } = claudeCommand();
   const child = spawn(command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
-  const proc: Proc = { child, stopped: false, pending: new Map(), permissionMode: opts.permissionMode, emit };
+  const proc: Proc = { child, stopped: false, pending: new Map(), permissionMode: opts.permissionMode, emit, onPlan: opts.onPlan };
   procs.set(runId, proc);
 
   let finished = false;
@@ -231,6 +237,26 @@ function handleControlRequest(proc: Proc, e: any) {
       type: "control_response",
       response: { subtype: "error", request_id: e.request_id, error: `Unsupported control request: ${req.subtype}` },
     });
+    return;
+  }
+  if (proc.onPlan && req.tool_name === "ExitPlanMode") {
+    const plan = typeof req.input?.plan === "string" ? req.input.plan.trim() : "";
+    if (plan) proc.onPlan(plan);
+    writeLine(proc.child, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: e.request_id,
+        response: {
+          behavior: "deny",
+          message: plan
+            ? "The dashboard saved your plan for the user to review. Stop here without changing anything. " +
+              "Once they approve it, this session continues and you'll build it."
+            : "The plan was empty. Call ExitPlanMode again with your full plan.",
+        },
+      },
+    });
+    if (plan) proc.emit({ type: "item", item: { kind: "system", id: randomUUID(), text: "Plan sent to the task card for approval" } });
     return;
   }
   // Even in bypassPermissions mode Claude Code still asks before some calls (e.g. edits under

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -130,6 +131,40 @@ app.delete("/api/projects/:id", (c) => {
   return c.body(null, 204);
 });
 
+// Opens the project folder in the file manager or VS Code (the sidebar's right-click menu). Only the project's own
+// path is passed, never anything from the request.
+app.post("/api/projects/:id/open", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  const body = await c.req.json<{ app?: string }>().catch(() => ({ app: undefined }));
+  if (body.app !== "folder" && body.app !== "editor") throw new HttpError(400, "app must be folder or editor");
+  if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  const editor = body.app === "editor";
+  // `code` is a .cmd script on Windows, so it needs a shell (and a quoted path).
+  const [command, args, shell]: [string, string[], boolean] = editor
+    ? ["code", [`"${p.path}"`], true]
+    : process.platform === "win32"
+      ? ["explorer.exe", [p.path], false]
+      : [process.platform === "darwin" ? "open" : "xdg-open", [p.path], false];
+  await new Promise<void>((resolve, reject) => {
+    const fail = () =>
+      reject(new HttpError(400, editor ? "Couldn't run `code`. Is VS Code's command on your PATH?" : `Couldn't open ${p.path}`));
+    const child = spawn(command, args, { shell, detached: true, stdio: "ignore", windowsHide: true });
+    child.once("error", fail);
+    if (editor) {
+      // Through a shell a missing command doesn't fail to spawn; it exits non-zero. `code` itself returns at once.
+      child.once("exit", (code) => (code === 0 ? resolve() : fail()));
+      setTimeout(resolve, 5000).unref();
+    } else {
+      // explorer.exe exits with 1 even when it worked, so only a failed spawn counts.
+      child.once("spawn", () => {
+        child.unref();
+        resolve();
+      });
+    }
+  });
+  return c.body(null, 204);
+});
+
 // ── Settings ────────────────────────────────────────────────────────────────
 
 app.get("/api/settings", (c) => c.json(getSettings()));
@@ -190,6 +225,8 @@ app.patch("/api/projects/:id/tasks/:taskId", async (c) => {
   const leaving = input.status !== undefined && input.status !== "doing" && before.status === "doing";
   // Claude's notes about its last attempt only make sense while the card is in progress.
   if (leaving) Object.assign(input, { agentStatus: undefined, agentNote: undefined });
+  // Turning plan-first on or off starts the planning over.
+  if ("planFirst" in input && !input.planFirst !== !before.planFirst) Object.assign(input, { plan: undefined, planApproved: undefined });
 
   const task = await updateTask(p.path, taskId, input);
   if (!task) throw new HttpError(404, "Task not found");
@@ -213,6 +250,25 @@ app.post("/api/projects/:id/tasks/:taskId/run", async (c) => {
   if (body.resume === true && !task.sessionId) throw new HttpError(400, "This task has no Claude session to resume");
   if (task.status !== "doing") task = (await updateTask(p.path, task.id, { status: "doing" }))!;
   return c.json(startTaskRun(p, task, { resume: body.resume === true, feedback }), 201);
+});
+
+// Answer a plan-first task's plan. `{ "approve": true, "note"?: "…" }` continues its session in the project's task
+// mode to build the plan; `{ "approve": false, "feedback": "…" }` sends it back to plan mode to revise.
+app.post("/api/projects/:id/tasks/:taskId/plan", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  if (!fs.existsSync(p.path)) throw new HttpError(400, `Project folder not found: ${p.path}`);
+  const body = (await c.req.json().catch(() => ({}))) as { approve?: unknown; note?: unknown; feedback?: unknown };
+  if (typeof body.approve !== "boolean") throw new HttpError(400, "approve must be true or false");
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 10_000) : undefined);
+  const feedback = text(body.feedback);
+  if (!body.approve && !feedback) throw new HttpError(400, "Say what to change in the plan");
+  let task = await getTask(p.path, c.req.param("taskId"));
+  if (!task) throw new HttpError(404, "Task not found");
+  if (!task.planFirst || !task.plan || task.planApproved) throw new HttpError(409, "This task has no plan waiting for approval");
+  if (activeRunForTask(task.id)) throw new HttpError(409, "Claude is still working on this task");
+  task = (await updateTask(p.path, task.id, { status: "doing", ...(body.approve ? { planApproved: true } : {}) }))!;
+  const planReply = body.approve ? { approve: true as const, note: text(body.note) } : { approve: false as const, feedback: feedback! };
+  return c.json(startTaskRun(p, task, { planReply }), 201);
 });
 
 // ── Reviewing what a task changed ───────────────────────────────────────────

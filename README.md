@@ -52,7 +52,8 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   "Add project" also lists every folder you've already used Claude Code in.
 - **Tasks** live in each project at `.dashboard/tasks.json`, so Claude can read them and add follow-ups. The board
   updates live when the file changes, whoever edits it.
-  Quick-add syntax: `Fix login #bug !1` (kinds: `#feature #bug #chore #idea`, priority `!1`–`!3`).
+  Quick-add syntax: `Fix login #bug !1` (kinds: `#feature #bug #chore #idea`, priority `!1`–`!3`, `#plan` for plan
+  first).
 - **Task automation:** moving a card to *In progress* starts a new Claude session for it on the server, and the
   dashboard moves the card itself. Claude ends with `TASK_STATUS: done` (the card goes to *Done*) or
   `TASK_STATUS: blocked - …` (it stays in progress with Claude's question; reply in that session and the card moves
@@ -60,6 +61,10 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   stops its run. One task runs at a time per project; the rest queue. Auto-start and the permission mode for task
   sessions are per-project settings, separate from the chat's mode; Settings → Task sessions sets the mode for all
   projects at once.
+- **Plan first:** a per-task option (the card's details, its right-click menu, or `#plan`). Its session starts in
+  plan mode; when Claude presents its plan, the dashboard stops it there and shows the plan on the card.
+  **Approve & build** continues the same session in the project's task mode to build it (optionally with a note);
+  **Revise** sends your feedback back to plan mode for a new plan. Turning the option off or on starts planning over.
 - **Reviewing a task's changes:** in a git project, the dashboard snapshots the files (untracked ones included, as a
   git tree object, without touching your index) before a task's first run and again whenever a run in its session
   ends. The card then says how many files Claude changed; **Review** lists them with their diffs and offers

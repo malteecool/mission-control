@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { AlertTriangle, ChevronRight, Info, Sparkles, Terminal, User } from "lucide-react";
 import type { ChatItem } from "../lib/api.ts";
 
-const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="prose-chat">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
