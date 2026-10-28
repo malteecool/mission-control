@@ -545,6 +545,19 @@ app.get("/api/projects/:id/sessions/:sid", async (c) => {
   return c.json(t);
 });
 
+// ── Files ───────────────────────────────────────────────────────────────────
+
+app.get("/api/projects/:id/files", async (c) => c.json(await listDir(projectOr404(c.req.param("id")).path, c.req.query("path") ?? "")));
+
+app.get("/api/projects/:id/files/content", async (c) =>
+  c.json(await readFileContent(projectOr404(c.req.param("id")).path, c.req.query("path") ?? "")),
+);
+
+app.get("/api/projects/:id/files/raw", async (c) => {
+  const { data, type } = await readImage(projectOr404(c.req.param("id")).path, c.req.query("path") ?? "");
+  return c.body(new Uint8Array(data), 200, { "Content-Type": type, "X-Content-Type-Options": "nosniff" });
+});
+
 app.post("/api/projects/:id/chat", async (c) => {
   const p = projectOr404(c.req.param("id"));
   const body = await c.req.json<ChatRequest>();
