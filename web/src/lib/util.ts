@@ -15,6 +15,13 @@ export function timeAgo(iso?: string): string {
   return `${Math.round(mo / 12)}y ago`;
 }
 
+/** The most recent of the given timestamps, skipping missing ones. */
+export function newest(...isos: (string | undefined)[]): string | undefined {
+  let best: string | undefined;
+  for (const iso of isos) if (iso && (!best || new Date(iso).getTime() > new Date(best).getTime())) best = iso;
+  return best;
+}
+
 /** "in 5m", "in 3h", "in 2d"; "now" once it's due. */
 export function timeUntil(iso?: string): string {
   if (!iso) return "—";

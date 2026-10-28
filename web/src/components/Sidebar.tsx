@@ -22,7 +22,7 @@ import { api, type ProjectSummary } from "../lib/api.ts";
 import { href, navigate, useRoute, type Tab } from "../lib/router.ts";
 import { attempt, menu, type MenuItem } from "./ContextMenu.tsx";
 import { activeRuns, useRuns } from "../lib/runs.ts";
-import { timeAgo } from "../lib/util.ts";
+import { newest, timeAgo } from "../lib/util.ts";
 import { Dot } from "./ui.tsx";
 
 export function Sidebar({
@@ -180,7 +180,7 @@ export function Sidebar({
                     </div>
                     <div className="truncate font-mono text-[10px] text-slate-500">
                       {p.git.branch ? `${p.git.branch}${p.git.dirty ? ` · ${p.git.dirty}Δ` : ""} · ` : ""}
-                      {timeAgo(p.lastSessionAt ?? p.git.lastCommitAt ?? p.createdAt)}
+                      {timeAgo(newest(p.lastSessionAt, p.git.lastCommitAt) ?? p.createdAt)}
                     </div>
                   </div>
                   {awaiting.includes(p.id) && (

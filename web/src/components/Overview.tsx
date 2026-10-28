@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { CheckCircle2, CircleDot, FolderGit2, FolderPlus, Loader, Rocket } from "lucide-react";
 import { api, type ProjectSummary } from "../lib/api.ts";
 import { href } from "../lib/router.ts";
-import { KIND_STYLE, timeAgo } from "../lib/util.ts";
+import { KIND_STYLE, newest, timeAgo } from "../lib/util.ts";
 import { Button, Dot, Empty, Panel } from "./ui.tsx";
 import { HealthPanel } from "./HealthPanel.tsx";
 import { UsagePanel } from "./UsagePanel.tsx";
@@ -131,7 +131,7 @@ export function Overview({ projects, onAdd }: { projects: ProjectSummary[]; onAd
                   <div className="flex items-center gap-2">
                     <Dot color={p.color} />
                     <span className="truncate font-medium text-white">{p.name}</span>
-                    <span className="ml-auto font-mono text-[10px] text-slate-500">{timeAgo(p.lastSessionAt ?? p.git.lastCommitAt)}</span>
+                    <span className="ml-auto font-mono text-[10px] text-slate-500">{timeAgo(newest(p.lastSessionAt, p.git.lastCommitAt))}</span>
                   </div>
                   <p className="mt-1 line-clamp-1 min-h-5 text-xs text-slate-500">
                     {p.description || p.git.lastCommitMessage || p.path}
