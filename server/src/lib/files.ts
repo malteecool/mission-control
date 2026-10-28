@@ -24,10 +24,22 @@ export const IMAGE_TYPES: Record<string, string> = {
 
 export class FileError extends Error {
   constructor(
-    public status: 400 | 404,
+    public status: 400 | 403 | 404,
     message: string,
   ) {
     super(message);
+  }
+}
+
+/** Awaits a filesystem call, turning "missing" and "no access" errors into a FileError the Files tab can show. */
+async function fsCall<T>(op: Promise<T>, missing = "Not found"): Promise<T> {
+  try {
+    return await op;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw new FileError(404, missing);
+    if (code === "EACCES" || code === "EPERM") throw new FileError(403, "Permission denied");
+    throw err;
   }
 }
 
@@ -39,14 +51,14 @@ function inside(root: string, target: string) {
 /** The real absolute path of `rel` within the project, or a FileError. */
 async function resolve(projectPath: string, rel: string): Promise<{ abs: string; rel: string }> {
   if (rel.includes("\0") || path.isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) throw new FileError(400, "Invalid path");
-  const root = await fs.realpath(projectPath);
+  const root = await fsCall(fs.realpath(projectPath), "Project folder is missing");
   const joined = path.resolve(root, rel);
   if (!inside(root, joined)) throw new FileError(400, "That path is outside the project");
   let abs: string;
   try {
-    abs = await fs.realpath(joined);
-  } catch {
-    throw new FileError(404, "Not found");
+    abs = await fsCall(fs.realpath(joined));
+  } catch (err) {
+    throw err instanceof FileError ? err : new FileError(404, "Not found");
   }
   if (!inside(root, abs)) throw new FileError(400, "That path leads outside the project");
   return { abs, rel: path.relative(root, joined).split(path.sep).join("/") };
@@ -54,8 +66,8 @@ async function resolve(projectPath: string, rel: string): Promise<{ abs: string;
 
 export async function listDir(projectPath: string, relPath: string): Promise<DirListing> {
   const { abs, rel } = await resolve(projectPath, relPath);
-  if (!(await fs.stat(abs)).isDirectory()) throw new FileError(400, "Not a folder");
-  const dirents = await fs.readdir(abs, { withFileTypes: true });
+  if (!(await fsCall(fs.stat(abs))).isDirectory()) throw new FileError(400, "Not a folder");
+  const dirents = await fsCall(fs.readdir(abs, { withFileTypes: true }));
   const entries: FileEntry[] = [];
   // Everything is statted (in batches, to bound open handles) before sorting, so a big folder's cut-off keeps
   // the first entries in display order rather than whatever readdir returned first.
@@ -81,13 +93,13 @@ export async function listDir(projectPath: string, relPath: string): Promise<Dir
 
 export async function readFileContent(projectPath: string, relPath: string): Promise<FileContent> {
   const { abs, rel } = await resolve(projectPath, relPath);
-  const st = await fs.stat(abs);
+  const st = await fsCall(fs.stat(abs));
   if (!st.isFile()) throw new FileError(400, "Not a file");
   const base = { path: rel, size: st.size, modifiedAt: st.mtime.toISOString() };
   const image = path.extname(abs).toLowerCase() in IMAGE_TYPES && st.size <= MAX_IMAGE;
   if (image) return { ...base, binary: true, image };
 
-  const fh = await fs.open(abs, "r");
+  const fh = await fsCall(fs.open(abs, "r"));
   try {
     const buf = Buffer.alloc(Math.min(st.size, MAX_TEXT));
     const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
@@ -105,7 +117,7 @@ export async function readImage(projectPath: string, relPath: string): Promise<{
   const { abs } = await resolve(projectPath, relPath);
   const type = IMAGE_TYPES[path.extname(abs).toLowerCase()];
   if (!type) throw new FileError(400, "Not an image");
-  const st = await fs.stat(abs);
+  const st = await fsCall(fs.stat(abs));
   if (!st.isFile() || st.size > MAX_IMAGE) throw new FileError(400, "Not an image that can be previewed");
-  return { data: await fs.readFile(abs), type };
+  return { data: await fsCall(fs.readFile(abs)), type };
 }
