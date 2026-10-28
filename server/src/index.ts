@@ -28,7 +28,17 @@ import { PERMISSION_MODES, answerPermission, claudeInfo } from "./lib/claudeRunn
 import { getSettings, MODEL_RE, updateSettings, validateSettings } from "./lib/settings.ts";
 import { activeRunForTask, createRun, getRun, listRuns, runEventStream, stopRun } from "./lib/runs.ts";
 import { finishTaskTurn, startTaskRun, stopTaskRun, taskForSession } from "./lib/taskRuns.ts";
-import { ReviewError, changeSummaries, commitChanges, dismissReview, revertChanges, taskChanges } from "./lib/review.ts";
+import {
+  ReviewError,
+  changeSummaries,
+  commitChanges,
+  discardTask,
+  dismissReview,
+  mergeTask,
+  revertChanges,
+  taskChanges,
+} from "./lib/review.ts";
+import { shelveWorktree } from "./lib/worktrees.ts";
 import { watchTasksStream } from "./lib/taskWatcher.ts";
 import { usageReport } from "./lib/usage.ts";
 import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopDevServer } from "./lib/devServers.ts";
@@ -138,6 +148,7 @@ app.patch("/api/projects/:id", async (c) => {
     pinned: typeof body.pinned === "boolean" ? body.pinned : undefined,
     autoRun: typeof body.autoRun === "boolean" ? body.autoRun : undefined,
     autoPermissionMode: body.autoPermissionMode,
+    parallelTasks: typeof body.parallelTasks === "boolean" ? body.parallelTasks : undefined,
     touch: body.touch === true,
   });
   return c.json(await summarise(updated!));
@@ -299,7 +310,7 @@ app.patch("/api/projects/:id/tasks/:taskId", async (c) => {
   const task = await updateTask(p.path, taskId, input);
   if (!task) throw new HttpError(404, "Task not found");
   if (leaving) stopTaskRun(taskId);
-  if (entering && p.autoRun && fs.existsSync(p.path)) startTaskRun(p, task);
+  if (entering && p.autoRun && fs.existsSync(p.path)) await startTaskRun(p, task);
   return c.json(task);
 });
 
@@ -317,7 +328,7 @@ app.post("/api/projects/:id/tasks/:taskId/run", async (c) => {
   if (!task) throw new HttpError(404, "Task not found");
   if (body.resume === true && !task.sessionId) throw new HttpError(400, "This task has no Claude session to resume");
   if (task.status !== "doing") task = (await updateTask(p.path, task.id, { status: "doing" }))!;
-  return c.json(startTaskRun(p, task, { resume: body.resume === true, feedback }), 201);
+  return c.json(await startTaskRun(p, task, { resume: body.resume === true, feedback }), 201);
 });
 
 // Answer a plan-first task's plan. `{ "approve": true, "note"?: "…" }` continues its session in the project's task
@@ -336,7 +347,7 @@ app.post("/api/projects/:id/tasks/:taskId/plan", async (c) => {
   if (activeRunForTask(task.id)) throw new HttpError(409, "Claude is still working on this task");
   task = (await updateTask(p.path, task.id, { status: "doing", ...(body.approve ? { planApproved: true } : {}) }))!;
   const planReply = body.approve ? { approve: true as const, note: text(body.note) } : { approve: false as const, feedback: feedback! };
-  return c.json(startTaskRun(p, task, { planReply }), 201);
+  return c.json(await startTaskRun(p, task, { planReply }), 201);
 });
 
 // ── Reviewing what a task changed ───────────────────────────────────────────
@@ -374,6 +385,22 @@ app.post("/api/projects/:id/tasks/:taskId/changes/revert", async (c) => {
   return c.json(await revertChanges(p, taskId, paths));
 });
 
+// A task in its own worktree: merge its branch into the main checkout's branch (`{ "message": "…" }` commits what the
+// worktree hasn't committed yet first), or throw the branch away.
+app.post("/api/projects/:id/tasks/:taskId/changes/merge", async (c) => {
+  const taskId = c.req.param("taskId");
+  const { p, body } = await reviewRequest(c.req.param("id"), taskId, await c.req.json().catch(() => null));
+  if (typeof body.message !== "string" || !body.message.trim()) throw new HttpError(400, "A commit message is required");
+  return c.json(await mergeTask(p, taskId, body.message.trim().slice(0, 5000)));
+});
+
+app.post("/api/projects/:id/tasks/:taskId/changes/discard", async (c) => {
+  const taskId = c.req.param("taskId");
+  const { p } = await reviewRequest(c.req.param("id"), taskId, null);
+  await discardTask(p, taskId);
+  return c.body(null, 204);
+});
+
 // Done reviewing: forgets the snapshots and leaves the files as they are.
 app.delete("/api/projects/:id/tasks/:taskId/changes", async (c) => {
   await dismissReview(projectOr404(c.req.param("id")), c.req.param("taskId"));
@@ -382,8 +409,10 @@ app.delete("/api/projects/:id/tasks/:taskId/changes", async (c) => {
 
 app.delete("/api/projects/:id/tasks/:taskId", async (c) => {
   const p = projectOr404(c.req.param("id"));
-  if (!(await deleteTask(p.path, c.req.param("taskId")))) throw new HttpError(404, "Task not found");
-  stopTaskRun(c.req.param("taskId"));
+  const task = await getTask(p.path, c.req.param("taskId"));
+  if (!task || !(await deleteTask(p.path, task.id))) throw new HttpError(404, "Task not found");
+  // A worktree's work goes onto its branch and the folder goes away; not while a run might still be writing to it.
+  if (!stopTaskRun(task.id) && task.worktree) await shelveWorktree(p, task).catch((err) => console.error("Shelving worktree:", err));
   return c.body(null, 204);
 });
 

@@ -1,51 +1,20 @@
 // Review what a task session changed before keeping it. When a task run starts, the project's working tree is
 // snapshotted as a git tree object (through a throwaway index, so your own index is never touched); when it ends,
 // again. The card's review shows the diff between the two, so edits made by you or other tasks in between or
-// afterwards don't show up, and Commit / Revert act on exactly what the task's sessions wrote.
-import { spawn } from "node:child_process";
+// afterwards don't show up, and Commit / Revert act on exactly what the task's sessions wrote. A task with its own
+// worktree (worktrees.ts) is snapshotted there instead, and reviewing it ends in Merge (its branch into yours) or
+// Discard.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChangeSummary, ChangedFile, Project, Task, TaskChanges, TaskReview } from "../types.ts";
+import { git, mustGit, repoFor, type Repo } from "./git.ts";
 import { TASK_FILE, getTask, readTasks, updateTask } from "./tasks.ts";
+import { commitWorktree, importFollowUps, removeWorktree } from "./worktrees.ts";
 
-interface GitResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-}
-
-function git(
-  cwd: string,
-  args: string[],
-  opts: { index?: string; input?: string; timeout?: number } = {},
-): Promise<GitResult> {
-  return new Promise((resolve) => {
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(opts.index ? { GIT_INDEX_FILE: opts.index } : {}) };
-    const child = spawn("git", args, { cwd, env, windowsHide: true });
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    const timer = setTimeout(() => child.kill(), opts.timeout ?? 60_000);
-    child.stdout.on("data", (d: Buffer) => out.push(d));
-    child.stderr.on("data", (d: Buffer) => err.push(d));
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      resolve({ ok: false, stdout: "", stderr: e.message });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") });
-    });
-    child.stdin.end(opts.input ?? "");
-  });
-}
-
-async function mustGit(cwd: string, args: string[], opts?: Parameters<typeof git>[2]): Promise<string> {
-  const r = await git(cwd, args, opts);
-  if (!r.ok) throw new Error(`git ${args[0]} failed: ${r.stderr.trim() || "unknown error"}`);
-  return r.stdout;
-}
+/** Where the task's files are: its own worktree if it has one, else the project folder. */
+const taskDir = (project: Project, task: Task) => task.worktree?.path ?? project.path;
 
 /** A scratch index file, removed when `fn` is done. Starts as a copy of `from` if given. */
 async function withTempIndex<T>(from: string | null, fn: (index: string) => Promise<T>): Promise<T> {
@@ -57,20 +26,6 @@ async function withTempIndex<T>(from: string | null, fn: (index: string) => Prom
     await fs.rm(index, { force: true });
     await fs.rm(`${index}.lock`, { force: true });
   }
-}
-
-interface Repo {
-  root: string;
-  /** The project folder relative to the repo root, "" when the project is the whole repo. */
-  rel: string;
-}
-
-async function repoFor(projectPath: string): Promise<Repo | null> {
-  const r = await git(projectPath, ["rev-parse", "--show-toplevel"], { timeout: 4000 });
-  if (!r.ok) return null;
-  const root = path.resolve(r.stdout.trim());
-  const rel = path.relative(root, path.resolve(projectPath)).split(path.sep).join("/");
-  return { root, rel };
 }
 
 /** Records the working tree, including untracked files that aren't ignored, as a tree object. */
@@ -131,7 +86,7 @@ async function treeWith(root: string, tree: string, paths: string[], from: Map<s
 export async function beginReview(project: Project, taskId: string): Promise<void> {
   const task = await getTask(project.path, taskId);
   if (!task || task.review) return;
-  const repo = await repoFor(project.path);
+  const repo = await repoFor(taskDir(project, task));
   if (!repo) return;
   const review: TaskReview = { base: await snapshot(repo.root), head: await head(repo.root), startedAt: new Date().toISOString() };
   await updateTask(project.path, taskId, { review });
@@ -141,7 +96,7 @@ export async function beginReview(project: Project, taskId: string): Promise<voi
 export async function endReview(project: Project, taskId: string): Promise<void> {
   const task = await getTask(project.path, taskId);
   if (!task?.review) return;
-  const repo = await repoFor(project.path);
+  const repo = await repoFor(taskDir(project, task));
   if (!repo) return;
   const end = await snapshot(repo.root);
   await updateTask(project.path, taskId, { review: { ...task.review, end, endHead: await head(repo.root) } });
@@ -186,7 +141,7 @@ interface Resolved {
 
 async function resolve(project: Project, task: Task, opts: { persistEnd?: boolean } = {}): Promise<Resolved | null> {
   if (!task.review) return null;
-  const repo = await repoFor(project.path);
+  const repo = await repoFor(taskDir(project, task));
   if (!repo) return null;
   const review = task.review;
   if (review.end) return { repo, review, end: review.end, live: false };
@@ -209,9 +164,10 @@ export async function taskChanges(project: Project, taskId: string): Promise<Tas
   const task = await getTask(project.path, taskId);
   if (!task) throw new ReviewError(404, "Task not found");
   const r = await resolve(project, task);
-  if (!r) return { taskId, files: [], live: false, commits: [] };
+  const branches = task.worktree ? { branch: task.worktree.branch, into: await currentBranch(project.path) } : {};
+  if (!r) return { taskId, files: [], live: false, commits: [], ...branches };
   if (!(await objectsExist(r.repo.root, r.review.base, r.end)))
-    return { taskId, files: [], live: r.live, commits: [], since: r.review.startedAt, missing: true };
+    return { taskId, files: [], live: r.live, commits: [], since: r.review.startedAt, missing: true, ...branches };
 
   const files = await changedFiles(r.repo, r.review.base, r.end);
   const patch = await mustGit(r.repo.root, ["diff", "--no-renames", "--no-ext-diff", "--no-color", r.review.base, r.end, ...pathspec(r.repo)]);
@@ -232,20 +188,32 @@ export async function taskChanges(project: Project, taskId: string): Promise<Tas
     const log = await git(r.repo.root, ["log", "--format=%h %s", "-n", "20", `${r.review.head}..${until}`]);
     commits = log.ok ? log.stdout.split("\n").filter(Boolean) : [];
   }
-  return { taskId, files: withPatches, live: r.live, commits, since: r.review.startedAt };
+  // Nobody else works in a task's worktree, so comparing with its files as they are now is still just the task's work.
+  return { taskId, files: withPatches, live: r.live && !task.worktree, commits, since: r.review.startedAt, ...branches };
+}
+
+/** The branch the main checkout is on; undefined when HEAD is detached. */
+async function currentBranch(projectPath: string): Promise<string | undefined> {
+  const r = await git(projectPath, ["symbolic-ref", "--short", "-q", "HEAD"]);
+  return (r.ok && r.stdout.trim()) || undefined;
 }
 
 /** File counts for every task on the board that has changes to review. */
 export async function changeSummaries(project: Project): Promise<ChangeSummary[]> {
   const tasks = (await readTasks(project.path)).filter((t) => t.review);
   if (!tasks.length) return [];
-  const repo = await repoFor(project.path);
-  if (!repo) return [];
-  let current: Promise<string> | undefined;
+  // The main checkout plus each task's worktree; a "now" snapshot is taken at most once per checkout.
+  const repos = new Map<string, Promise<Repo | null>>();
+  const current = new Map<string, Promise<string>>();
   const out: ChangeSummary[] = [];
   for (const t of tasks) {
+    const dir = taskDir(project, t);
+    if (!repos.has(dir)) repos.set(dir, repoFor(dir));
+    const repo = await repos.get(dir)!;
+    if (!repo) continue;
     const review = t.review!;
-    const end = review.end ?? (await (current ??= snapshot(repo.root)));
+    if (!review.end && !current.has(repo.root)) current.set(repo.root, snapshot(repo.root));
+    const end = review.end ?? (await current.get(repo.root)!);
     const key = `${repo.rel}:${review.base}:${end}`;
     let files = summaryCache.get(key);
     if (!files) {
@@ -253,9 +221,10 @@ export async function changeSummaries(project: Project): Promise<ChangeSummary[]
       files = await changedFiles(repo, review.base, end);
       if (review.end) summaryCache.set(key, files);
     }
-    if (!files.length) continue;
+    if (!files.length && !t.worktree) continue;
     out.push({
       taskId: t.id,
+      branch: t.worktree?.branch,
       files: files.length,
       added: files.reduce((n, f) => n + f.added, 0),
       removed: files.reduce((n, f) => n + f.removed, 0),
@@ -369,5 +338,60 @@ export function revertChanges(project: Project, taskId: string, paths?: string[]
 export function dismissReview(project: Project, taskId: string) {
   return withLock(taskId, async () => {
     if (!(await updateTask(project.path, taskId, { review: undefined }))) throw new ReviewError(404, "Task not found");
+  });
+}
+
+/**
+ * Merges a worktree task's branch into the branch your main checkout is on: first commits what the worktree has
+ * uncommitted (as `message`), then `git merge` (a fast-forward when your branch hasn't moved). On a conflict the
+ * merge is aborted, so your checkout is left as it was. Once merged, the worktree and branch are removed.
+ */
+export function mergeTask(project: Project, taskId: string, message: string) {
+  // One at a time per project: every merge lands in the same checkout.
+  return withLock(`merge:${project.id}`, async () => {
+    const task = await getTask(project.path, taskId);
+    if (!task) throw new ReviewError(404, "Task not found");
+    const wt = task.worktree;
+    if (!wt) throw new ReviewError(400, "This task doesn't have its own branch to merge");
+    const main = await repoFor(project.path);
+    if (!main) throw new ReviewError(400, "The project isn't a git repository");
+    const into = await currentBranch(main.root);
+    if (!into) throw new ReviewError(409, "Your checkout isn't on a branch (detached HEAD), so there's nothing to merge into");
+
+    await importFollowUps(project, wt).catch(() => {});
+    try {
+      await commitWorktree(wt, message);
+    } catch (err) {
+      throw new ReviewError(409, `Couldn't commit the task's changes on ${wt.branch}: ${(err as Error).message}`);
+    }
+    const before = await head(main.root);
+    const r = await git(main.root, ["merge", "--no-edit", "-m", `Merge ${wt.branch}: ${task.title}`, wt.branch], { timeout: 120_000 });
+    if (!r.ok) {
+      const conflicts = (await git(main.root, ["diff", "--name-only", "--diff-filter=U"])).stdout.split("\n").filter(Boolean);
+      if (conflicts.length) {
+        await git(main.root, ["merge", "--abort"]);
+        throw new ReviewError(
+          409,
+          `Merging ${wt.branch} into ${into} conflicts in ${conflicts.join(", ")}. Nothing was merged. ` +
+            `Ask Claude to merge ${into} into its branch and resolve the conflicts, then merge again.`,
+        );
+      }
+      throw new ReviewError(409, `git merge failed: ${(r.stderr || r.stdout).trim() || "unknown error"}`);
+    }
+    const after = await head(main.root);
+    await removeWorktree(project, wt, { deleteBranch: true }).catch((err) => console.error("Removing worktree:", err));
+    await updateTask(project.path, task.id, { worktree: undefined, review: undefined });
+    return { commit: after && after !== before ? after.slice(0, 12) : undefined, branch: wt.branch, into };
+  });
+}
+
+/** Throws away a worktree task's branch and its folder, uncommitted work and all. */
+export function discardTask(project: Project, taskId: string) {
+  return withLock(`merge:${project.id}`, async () => {
+    const task = await getTask(project.path, taskId);
+    if (!task) throw new ReviewError(404, "Task not found");
+    if (!task.worktree) throw new ReviewError(400, "This task doesn't have its own branch to discard");
+    await removeWorktree(project, task.worktree, { deleteBranch: true });
+    await updateTask(project.path, task.id, { worktree: undefined, review: undefined });
   });
 }

@@ -210,7 +210,25 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
               <span className="text-sm text-slate-200">
                 Start a Claude session when a task moves to In progress
                 <span className="block text-xs text-slate-500">
-                  The card moves to Done when Claude confirms it finished. One task runs at a time per project; others queue.
+                  The card moves to Done when Claude confirms it finished.
+                  {p.parallelTasks ? " Tasks run side by side, each in its own worktree." : " One task runs at a time per project; others queue."}
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={p.parallelTasks}
+                onChange={(e) => update.mutate({ parallelTasks: e.target.checked })}
+                disabled={!p.git.isRepo}
+                className="mt-0.5 accent-[var(--accent)]"
+              />
+              <span className={clsx("text-sm", p.git.isRepo ? "text-slate-200" : "text-slate-500")}>
+                Run tasks in parallel, each in its own git worktree and branch
+                <span className="block text-xs text-slate-500">
+                  {p.git.isRepo
+                    ? "Each task gets a checkout under .claude/worktrees/ on a task/… branch, so several can run at once. Reviewing a task means merging its branch."
+                    : "Needs the project to be a git repository."}
                 </span>
               </span>
             </label>

@@ -2,11 +2,14 @@
 // outcome moves the card. The dashboard owns the task's status; Claude only reports whether it finished.
 // Plan-first tasks start in plan mode: the plan goes onto the card, and approving it continues the same
 // session in the project's task mode to build it.
+// In a project that runs tasks in parallel, each task works in its own git worktree and branch (worktrees.ts) and
+// starts right away; otherwise task runs share the project folder and queue one at a time.
 import type { ChatEvent, Project, RunInfo, Task } from "../types.ts";
 import { beginReview, endReview } from "./review.ts";
 import { activeRunForTask, createRun, stopRun } from "./runs.ts";
 import { getSettings } from "./settings.ts";
 import { getTask, readTasks, updateTask, type TaskInput } from "./tasks.ts";
+import { createWorktree, importFollowUps } from "./worktrees.ts";
 
 const MARKER_DONE = /^\s*TASK_STATUS:\s*done\b/im;
 const MARKER_BLOCKED = /^\s*TASK_STATUS:\s*blocked\b[\s:\-–—]*(.*)$/im;
@@ -27,7 +30,14 @@ const header = (t: Task) => [
   `Task: ${t.title}`,
   ...(t.notes?.trim() ? ["", `Notes: ${t.notes.trim()}`] : []),
   "",
+  ...(t.worktree ? [worktreeNote(t.worktree.branch), ""] : []),
 ];
+
+const worktreeNote = (branch: string) =>
+  `You're in a git worktree of the project on its own branch, ${branch}, so other tasks can run at the same time ` +
+  "in their own worktrees. Keep all your changes in this folder; when I've reviewed them I merge the branch. " +
+  "It's a fresh checkout, so anything git doesn't track (installed dependencies, build output, .env files) isn't " +
+  "here until you set it up. Committing to this branch is fine, but leave .dashboard/tasks.json out of commits.";
 
 // Your standing instructions from the settings page, e.g. "Run the tests before finishing".
 function standing(): string[] {
@@ -100,21 +110,30 @@ export const isPlanning = (t: Task) => !!t.planFirst && !t.planApproved;
 export type PlanReply = { approve: true; note?: string } | { approve: false; feedback: string };
 
 /**
- * Starts (or queues) a session for the task. Returns the existing run if one is already active.
+ * Starts (or queues) a session for the task. Returns the existing run if one is already active. In a parallel project
+ * a fresh start first gives the task its own worktree; one that has a worktree keeps working there.
  * With `resume`, continues the task's last session instead of starting a fresh one. With `feedback` (your
  * review of its changes), continues that session if there is one and asks for those changes. With `planReply`,
  * continues the planning session to build the plan (pass the task already marked planApproved) or to revise it.
  */
-export function startTaskRun(
+export async function startTaskRun(
   project: Project,
   task: Task,
   opts: { resume?: boolean; feedback?: string; planReply?: PlanReply } = {},
-): RunInfo {
+): Promise<RunInfo> {
   const existing = activeRunForTask(task.id);
   if (existing) return existing;
-  const planning = isPlanning(task);
   const { planReply } = opts;
   const resume = (opts.resume || opts.feedback || planReply) && task.sessionId;
+  // Not when continuing a session (it lives in the folder it started in) or when there are changes in the project
+  // folder waiting for review: those stay where they are.
+  if (project.parallelTasks && !task.worktree && !resume && !task.review) {
+    const worktree = await createWorktree(project, task).catch((err) => void log(err));
+    if (worktree) task = (await updateTask(project.path, task.id, { worktree })) ?? { ...task, worktree };
+    const raced = activeRunForTask(task.id);
+    if (raced) return raced;
+  }
+  const planning = isPlanning(task);
   let prompt: string;
   if (resume)
     prompt = planReply
@@ -136,9 +155,10 @@ export function startTaskRun(
     projectId: project.id,
     taskId: task.id,
     title: task.title,
-    queueKey: `project:${project.id}`,
+    // Tasks in their own worktree don't get in each other's way, so they don't wait for one another.
+    queueKey: task.worktree ? undefined : `project:${project.id}`,
     launch: {
-      cwd: project.path,
+      cwd: task.worktree?.path ?? project.path,
       prompt,
       sessionId: resume ? task.sessionId : undefined,
       // Planning happens in plan mode; once approved, the same session builds in the project's task mode.
@@ -183,6 +203,8 @@ export async function taskForSession(project: Project, sessionId: string): Promi
 export async function finishTaskTurn(project: Project, taskId: string, info: RunInfo, last: ChatEvent | null, plan?: string) {
   await endReview(project, taskId).catch(log);
   const task = await getTask(project.path, taskId);
+  // Follow-up tasks Claude added to the worktree's copy of the board belong on the real one.
+  if (task?.worktree) await importFollowUps(project, task.worktree).catch(log);
   if (task && info.permissionMode === "plan" && isPlanning(task)) await applyPlanOutcome(project, task, info, last, plan);
   else await applyOutcome(project, taskId, info, last);
 }

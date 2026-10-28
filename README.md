@@ -58,7 +58,7 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   dashboard moves the card itself. Claude ends with `TASK_STATUS: done` (the card goes to *Done*) or
   `TASK_STATUS: blocked - …` (it stays in progress with Claude's question; reply in that session and the card moves
   once Claude confirms). Failed or stopped runs stay in progress with the error. Moving the card out of *In progress*
-  stops its run. One task runs at a time per project; the rest queue. Auto-start and the permission mode for task
+  stops its run. One task runs at a time per project and the rest queue, unless the project runs tasks in parallel (below). Auto-start and the permission mode for task
   sessions are per-project settings, separate from the chat's mode; Settings → Task sessions sets the mode for all
   projects at once.
 - **Plan first:** a per-task option (the card's details, its right-click menu, or `#plan`). Its session starts in
@@ -74,6 +74,16 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   uncommitted**. Because it compares the two snapshots, edits made by you or other tasks don't show up in a task's
   review. `.dashboard/tasks.json` is left out. The snapshots aren't referenced by any branch, so a `git gc` more than
   two weeks later can remove them; the review then says so and can only be dismissed.
+- **Parallel tasks (per-project setting):** each task gets its own git worktree under `.claude/worktrees/task-<id>`
+  on a `task/<title>-<id>` branch from your current HEAD, so several tasks run at once instead of queueing. The
+  folder is added to `.git/info/exclude`, so it never shows up in your `git status`. Claude is told it's a fresh
+  checkout (no installed dependencies or `.env`). Follow-up tasks it adds to the worktree's copy of the board are
+  copied onto the real one. Its review is a branch: **Merge** commits what Claude left uncommitted onto the branch
+  (without `tasks.json`), merges it into the branch your checkout is on (fast-forward when possible), then removes
+  the worktree and branch. A conflict aborts the merge and leaves your checkout as it was, and **Ask Claude to resolve
+  the conflicts** sends the task back to merge your branch into its own. **Discard branch** deletes both. Deleting the
+  task commits its work to the branch as WIP and removes the folder, but keeps the branch. Tasks that already have
+  a session or changes waiting for review when you turn this on keep working in the project folder.
 - **Runs live on the server,** so chats and task sessions keep going when you navigate away or reload. Cards and
   the chat show what's running; open one to watch it or answer approvals.
 - **Chat** runs `claude -p --output-format stream-json` in the project folder, using your normal Claude login.

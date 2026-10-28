@@ -1,8 +1,9 @@
 // Review what a task's Claude sessions changed: the files, their diffs, and Commit / Revert / Ask for changes.
+// A task that ran in its own worktree is reviewed as a branch instead: Merge it, Discard it, or Ask for changes.
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertTriangle, Check, GitCommitHorizontal, MessageSquareReply, Undo2, X } from "lucide-react";
+import { AlertTriangle, Check, GitBranch, GitCommitHorizontal, GitMerge, MessageSquareReply, Trash2, Undo2, X } from "lucide-react";
 import { api, type ChangedFile, type Task } from "../lib/api.ts";
 import { timeAgo } from "../lib/util.ts";
 import { Button, ErrorNote, IconButton, Modal, ModalHeader } from "./ui.tsx";
@@ -40,6 +41,8 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
   const [feedback, setFeedback] = useState("");
   const [confirmRevert, setConfirmRevert] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const branch = task.worktree?.branch;
+  const into = changes.data?.into;
 
   const current = files.find((f) => f.path === selected) ?? files[0];
   useEffect(() => setConfirmRevert(false), [files.length]);
@@ -77,6 +80,8 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
       ),
   });
   const dismiss = useMutation({ mutationFn: () => api.dismissChanges(projectId, task.id), onSuccess: () => settle(0, null) });
+  const merge = useMutation({ mutationFn: () => api.mergeTask(projectId, task.id, message.trim()), onSuccess: () => settle(0, null) });
+  const discard = useMutation({ mutationFn: () => api.discardTask(projectId, task.id), onSuccess: () => settle(0, null) });
   const ask = useMutation({
     mutationFn: () => api.askForChanges(projectId, task.id, feedback.trim()),
     onSuccess: () => {
@@ -85,8 +90,10 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
       onClose();
     },
   });
-  const busy = commit.isPending || revert.isPending || dismiss.isPending || ask.isPending;
-  const error = changes.error ?? commit.error ?? revert.error ?? dismiss.error ?? ask.error;
+  const busy = commit.isPending || revert.isPending || dismiss.isPending || ask.isPending || merge.isPending || discard.isPending;
+  const error = changes.error ?? commit.error ?? revert.error ?? dismiss.error ?? ask.error ?? merge.error ?? discard.error;
+  // The branch and the checkout changed the same lines: Claude can merge your branch into its own and sort it out.
+  const conflicted = !!merge.error?.message.includes(" conflicts in ");
 
   return (
     <>
@@ -97,6 +104,12 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
             {files.length} file{files.length === 1 ? "" : "s"} changed by Claude
             {changes.data?.since && ` since ${timeAgo(changes.data.since)}`}
           </span>
+          {branch && (
+            <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-300" title="The task's own branch and worktree">
+              <GitBranch size={11} /> {branch}
+              {into && <span className="text-slate-500"> → {into}</span>}
+            </span>
+          )}
           <span className="font-mono text-emerald-300/80">+{files.reduce((n, f) => n + f.added, 0)}</span>
           <span className="font-mono text-rose-300/80">−{files.reduce((n, f) => n + f.removed, 0)}</span>
         </div>
@@ -106,7 +119,12 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
             which may include edits made since.
           </Warning>
         )}
-        {!!changes.data?.commits.length && (
+        {!!changes.data?.commits.length && branch && (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300">
+            Claude's commits on the branch: {changes.data.commits.join(" · ")}. Merge brings them along.
+          </div>
+        )}
+        {!!changes.data?.commits.length && !branch && (
           <Warning>
             Claude also made commits: {changes.data.commits.join(" · ")}. Commit skips what's already in them; Revert puts
             the files back but leaves the commits in your history.
@@ -116,6 +134,20 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
           <Warning>Git has cleaned up the snapshots for this review, so the changes can't be shown. Dismiss it.</Warning>
         )}
         {error && <ErrorNote>{error.message}</ErrorNote>}
+        {conflicted && !asking && (
+          <Button
+            size="sm"
+            onClick={() => {
+              setFeedback(
+                `Merging your branch into ${into ?? "my branch"} conflicts. Merge ${into ?? "my branch"} into your branch, ` +
+                  "resolve the conflicts, and commit the result so it merges cleanly.",
+              );
+              setAsking(true);
+            }}
+          >
+            <MessageSquareReply size={13} /> Ask Claude to resolve the conflicts
+          </Button>
+        )}
         {note && (
           <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-300">{note}</div>
         )}
@@ -194,6 +226,35 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
               </Button>
             </div>
           </form>
+        ) : branch ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Commit message"
+              className="accent-ring h-9 min-w-[220px] flex-1 rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white placeholder:text-slate-600"
+            />
+            <Button
+              variant="primary"
+              disabled={!files.length || !message.trim() || busy}
+              onClick={() => merge.mutate()}
+              title="Commits what Claude left uncommitted on the task's branch, merges it into your current branch, then removes the worktree"
+            >
+              <GitMerge size={14} /> Merge{into ? ` into ${into}` : ""}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => (confirmRevert ? discard.mutate() : setConfirmRevert(true))}
+              onBlur={() => setConfirmRevert(false)}
+              title="Deletes the task's branch and worktree, and everything Claude did in them"
+            >
+              <Trash2 size={14} /> {confirmRevert ? "Click again to discard" : "Discard branch"}
+            </Button>
+            <Button disabled={busy} onClick={() => setAsking(true)}>
+              <MessageSquareReply size={14} /> Ask for changes
+            </Button>
+          </div>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
             <input

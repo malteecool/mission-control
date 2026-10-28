@@ -58,7 +58,7 @@ async function writeTasks(projectPath: string, tasks: Task[]): Promise<void> {
 export type TaskInput = Partial<
   Pick<
     Task,
-    "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review" | "planFirst" | "plan" | "planApproved"
+    "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review" | "planFirst" | "plan" | "planApproved" | "worktree"
   >
 >;
 
@@ -135,6 +135,17 @@ export function updateTask(projectPath: string, id: string, patch: TaskInput): P
     tasks[idx] = next;
     await writeTasks(projectPath, tasks);
     return next;
+  });
+}
+
+/** Adds the tasks whose ids aren't on the board yet, keeping their ids; returns how many were added. */
+export function addTasks(projectPath: string, incoming: Task[]): Promise<number> {
+  return withLock(projectPath, async () => {
+    const tasks = await readTasks(projectPath);
+    const known = new Set(tasks.map((t) => t.id));
+    const fresh = incoming.filter((t) => !known.has(t.id));
+    if (fresh.length) await writeTasks(projectPath, [...tasks, ...fresh]);
+    return fresh.length;
   });
 }
 

@@ -31,6 +31,19 @@ export interface Task {
   plan?: string;
   /** You approved `plan`; later runs build instead of planning. Cleared when planFirst is toggled. */
   planApproved?: boolean;
+  /** The task's own git worktree and branch (projects that run tasks in parallel). Cleared once merged or discarded. */
+  worktree?: TaskWorktree;
+}
+
+/** A checkout of the project on its own branch, under <project>/.claude/worktrees/, where one task's sessions work. */
+export interface TaskWorktree {
+  /** The worktree's top folder. */
+  root: string;
+  /** The project folder inside it, where Claude runs (the same as root unless the project is a subfolder of its repo). */
+  path: string;
+  branch: string;
+  /** The commit the branch started from. */
+  base: string;
 }
 
 /** Git tree objects recording the project's working tree (untracked files included) around a task's sessions. */
@@ -68,11 +81,16 @@ export interface TaskChanges {
   since?: string;
   /** Git has cleaned up the snapshots, so the changes can't be shown any more. */
   missing?: boolean;
+  /** For a task in its own worktree: its branch, and the branch your main checkout is on (what Merge merges into). */
+  branch?: string;
+  into?: string;
 }
 
 /** One entry per task with changes to review, from GET /api/projects/:id/changes. */
 export interface ChangeSummary {
   taskId: string;
+  /** Set for a task in its own worktree; listed even with no changed files, so its branch can be discarded. */
+  branch?: string;
   files: number;
   added: number;
   removed: number;
@@ -141,6 +159,8 @@ export interface Project {
   autoRun: boolean;
   /** Permission mode those task sessions run in. */
   autoPermissionMode: PermissionMode;
+  /** Give each task its own git worktree and branch so several run at once, instead of one at a time in the folder. */
+  parallelTasks: boolean;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";

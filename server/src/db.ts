@@ -45,6 +45,7 @@ const columns = new Set(
 if (!columns.has("auto_run")) db.exec("ALTER TABLE projects ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 1");
 if (!columns.has("auto_permission_mode"))
   db.exec("ALTER TABLE projects ADD COLUMN auto_permission_mode TEXT NOT NULL DEFAULT 'acceptEdits'");
+if (!columns.has("parallel_tasks")) db.exec("ALTER TABLE projects ADD COLUMN parallel_tasks INTEGER NOT NULL DEFAULT 0");
 
 interface ProjectRow {
   id: number;
@@ -57,6 +58,7 @@ interface ProjectRow {
   last_opened_at: string | null;
   auto_run: number;
   auto_permission_mode: PermissionMode;
+  parallel_tasks: number;
 }
 
 function toProject(row: ProjectRow): Project {
@@ -71,6 +73,7 @@ function toProject(row: ProjectRow): Project {
     lastOpenedAt: row.last_opened_at ?? undefined,
     autoRun: row.auto_run === 1,
     autoPermissionMode: row.auto_permission_mode,
+    parallelTasks: row.parallel_tasks === 1,
   };
 }
 
@@ -123,7 +126,7 @@ export function createProject(input: {
 
 export function updateProject(
   id: number,
-  patch: Partial<Pick<Project, "name" | "color" | "description" | "pinned" | "autoRun" | "autoPermissionMode">> & {
+  patch: Partial<Pick<Project, "name" | "color" | "description" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks">> & {
     touch?: boolean;
   },
 ): Project | undefined {
@@ -133,7 +136,7 @@ export function updateProject(
   const provided = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
   const next = { ...current, ...provided };
   db.prepare(
-    "UPDATE projects SET name = ?, color = ?, description = ?, pinned = ?, auto_run = ?, auto_permission_mode = ?, last_opened_at = ? WHERE id = ?",
+    "UPDATE projects SET name = ?, color = ?, description = ?, pinned = ?, auto_run = ?, auto_permission_mode = ?, parallel_tasks = ?, last_opened_at = ? WHERE id = ?",
   ).run(
     next.name,
     next.color,
@@ -141,6 +144,7 @@ export function updateProject(
     next.pinned ? 1 : 0,
     next.autoRun ? 1 : 0,
     next.autoPermissionMode,
+    next.parallelTasks ? 1 : 0,
     patch.touch ? new Date().toISOString() : (current.lastOpenedAt ?? null),
     id,
   );

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Square, StepForward, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Square, StepForward, Trash2 } from "lucide-react";
 import { api, type ChangeSummary, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus, type UsageTotals } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
@@ -328,7 +328,11 @@ function TaskCard({
     !done && !run && { label: planning ? "Start planning" : "Start Claude session", icon: <Play size={14} />, onSelect: onStart },
     !done && !run && !!t.sessionId && { label: "Resume session", icon: <StepForward size={14} />, onSelect: onResume },
     run && { label: "Stop run", icon: <Square size={13} />, onSelect: () => onStop(run) },
-    changes && !run && { label: `Review changes (${changes.files})`, icon: <FileDiff size={14} />, onSelect: onReview },
+    changes && !run && {
+      label: changes.branch ? `Review branch (${changes.files})` : `Review changes (${changes.files})`,
+      icon: changes.branch ? <GitBranch size={14} /> : <FileDiff size={14} />,
+      onSelect: onReview,
+    },
     "separator",
     {
       label: "Move to",
@@ -435,6 +439,11 @@ function TaskCard({
               PLAN
             </button>
           )}
+          {t.worktree && (
+            <span className="text-slate-500" title={`Works in its own worktree on ${t.worktree.branch}`}>
+              <GitBranch size={10} />
+            </span>
+          )}
           <span className="font-mono text-[10px] text-slate-600">{timeAgo(done ? t.doneAt : t.updatedAt)}</span>
           {usage && (
             <span
@@ -506,11 +515,15 @@ function TaskCard({
         {changes && !run && (
           <Strip
             tone={done ? "accent" : "muted"}
-            icon={<FileDiff size={11} />}
-            text={`Claude changed ${changes.files} file${changes.files === 1 ? "" : "s"} · +${changes.added} −${changes.removed}`}
+            icon={changes.branch ? <GitBranch size={11} /> : <FileDiff size={11} />}
+            text={
+              changes.branch && !changes.files
+                ? `No changes on ${changes.branch}`
+                : `Claude changed ${changes.files} file${changes.files === 1 ? "" : "s"} · +${changes.added} −${changes.removed}`
+            }
           >
             <StripButton strong={done} onClick={onReview}>
-              Review
+              {changes.branch && changes.files ? "Review & merge" : "Review"}
             </StripButton>
           </Strip>
         )}

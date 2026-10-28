@@ -45,7 +45,7 @@ export const api = {
     request<ProjectSummary>("POST", "/api/projects", body),
   updateProject: (
     id: number,
-    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode">> & {
+    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks">> & {
       touch?: boolean;
     },
   ) =>
@@ -65,6 +65,9 @@ export const api = {
     request<{ commit?: string; files: number }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/commit`, { message, paths }),
   revertChanges: (id: number, taskId: string, paths?: string[]) =>
     request<{ reverted: string[]; skipped: string[] }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/revert`, { paths }),
+  mergeTask: (id: number, taskId: string, message: string) =>
+    request<{ commit?: string; branch: string; into: string }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/merge`, { message }),
+  discardTask: (id: number, taskId: string) => request<void>("POST", `/api/projects/${id}/tasks/${taskId}/changes/discard`),
   dismissChanges: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}/changes`),
   askForChanges: (id: number, taskId: string, feedback: string) =>
     request<RunInfo>("POST", `/api/projects/${id}/tasks/${taskId}/run`, { feedback }),
