@@ -6,6 +6,7 @@ import type { DirListing, FileContent, FileEntry } from "../types.ts";
 // (symlinks and junctions included) and must stay inside the project folder.
 
 const MAX_ENTRIES = 5000;
+const STAT_BATCH = 256;
 const MAX_TEXT = 512 * 1024;
 const MAX_IMAGE = 20 * 1024 * 1024;
 
@@ -56,20 +57,26 @@ export async function listDir(projectPath: string, relPath: string): Promise<Dir
   if (!(await fs.stat(abs)).isDirectory()) throw new FileError(400, "Not a folder");
   const dirents = await fs.readdir(abs, { withFileTypes: true });
   const entries: FileEntry[] = [];
-  for (const d of dirents.slice(0, MAX_ENTRIES)) {
+  // Everything is statted (in batches, to bound open handles) before sorting, so a big folder's cut-off keeps
+  // the first entries in display order rather than whatever readdir returned first.
+  for (let i = 0; i < dirents.length; i += STAT_BATCH) {
+    const batch = dirents.slice(i, i + STAT_BATCH);
     // stat follows symlinks, so a link to a folder lists as one; broken links are skipped.
-    const st = await fs.stat(path.join(abs, d.name)).catch(() => undefined);
-    if (!st) continue;
-    entries.push({
-      name: d.name,
-      path: rel ? `${rel}/${d.name}` : d.name,
-      type: st.isDirectory() ? "dir" : "file",
-      size: st.isDirectory() ? 0 : st.size,
-      modifiedAt: st.mtime.toISOString(),
+    const stats = await Promise.all(batch.map((d) => fs.stat(path.join(abs, d.name)).catch(() => undefined)));
+    batch.forEach((d, j) => {
+      const st = stats[j];
+      if (!st) return;
+      entries.push({
+        name: d.name,
+        path: rel ? `${rel}/${d.name}` : d.name,
+        type: st.isDirectory() ? "dir" : "file",
+        size: st.isDirectory() ? 0 : st.size,
+        modifiedAt: st.mtime.toISOString(),
+      });
     });
   }
   entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.type === "dir" ? -1 : 1));
-  return { path: rel, entries, truncated: dirents.length > MAX_ENTRIES || undefined };
+  return { path: rel, entries: entries.slice(0, MAX_ENTRIES), truncated: entries.length > MAX_ENTRIES || undefined };
 }
 
 export async function readFileContent(projectPath: string, relPath: string): Promise<FileContent> {
