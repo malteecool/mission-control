@@ -82,6 +82,8 @@ app.use("/api/*", async (c, next) => {
   if (!["localhost", "127.0.0.1", "[::1]"].includes(host)) return c.json({ error: "Forbidden host" }, 403);
   if (c.req.method !== "GET" && c.req.header("x-dashboard") !== "1") return c.json({ error: "Missing header" }, 403);
   await next();
+  // Always live data: never let the browser reuse an answer (it once kept index.html for an API path).
+  if (!c.res.headers.has("Cache-Control")) c.res.headers.set("Cache-Control", "no-store");
 });
 
 const emptyCounts = (): Record<TaskStatus, number> => ({ todo: 0, doing: 0, done: 0 });
@@ -697,7 +699,8 @@ const webDist = path.resolve(import.meta.dirname, "../../web/dist");
 if (fs.existsSync(webDist)) {
   const root = path.relative(process.cwd(), webDist);
   app.use("/*", serveStatic({ root }));
-  app.get("*", serveStatic({ path: path.join(root, "index.html") }));
+  // The page itself is checked with the server each time, so a new build shows up on reload.
+  app.get("*", serveStatic({ path: path.join(root, "index.html"), onFound: (_, c) => c.header("Cache-Control", "no-cache") }));
 }
 
 serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, (info) => {

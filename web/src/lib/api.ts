@@ -31,6 +31,8 @@ export class ApiError extends Error {}
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
+    // Skip the HTTP cache, including anything a browser kept from before the server sent no-store.
+    cache: "no-store",
     headers: { "content-type": "application/json", "x-dashboard": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
