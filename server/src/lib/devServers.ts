@@ -202,7 +202,9 @@ function openLog(file: string): number {
   return fs.openSync(file, "a");
 }
 
-export function startDevServer(projectId: number, dir: string, script: string): DevServerStatus {
+export async function startDevServer(projectId: number, dir: string, script: string): Promise<DevServerStatus> {
+  // A start made while the leftover sweep is still running would otherwise be taken for a leftover, or overwritten by one.
+  await leftoversAdopted;
   const existing = servers.get(projectId);
   if (existing?.info.status === "running") throw new Error("The dev server is already running");
   const scripts = readScripts(dir);
@@ -294,7 +296,8 @@ function killGroup(pgid: number) {
   }
 }
 
-export function stopDevServer(projectId: number): boolean {
+export async function stopDevServer(projectId: number): Promise<boolean> {
+  await leftoversAdopted; // Until then a leftover dev server isn't known yet.
   const s = servers.get(projectId);
   if (!s?.child && !s?.adopted) return false;
   s.stopRequested = true;
@@ -303,8 +306,9 @@ export function stopDevServer(projectId: number): boolean {
   else if (process.platform !== "win32") killGroup(s.adopted![0]);
   else {
     // Look again rather than trusting the PIDs from the restart: one may have exited and been reused since.
-    const pids = s.info.pid && s.info.startedAt ? leftoverTrees(processTable(), s.info.pid, Date.parse(s.info.startedAt), survivors(s)) : s.adopted!;
-    for (const pid of pids) killTree(pid);
+    const table = s.info.pid && s.info.startedAt ? (await windowsProcesses())?.table : undefined;
+    const pids = table ? leftoverTrees(table, s.info.pid!, Date.parse(s.info.startedAt!), survivors(s)) : s.adopted;
+    for (const pid of pids ?? []) killTree(pid);
   }
   return true;
 }
@@ -404,16 +408,44 @@ interface ProcessEntry {
   started: number;
 }
 
-/** Every running process with its parent and start time (Windows). */
-function processTable(): ProcessEntry[] {
+/** Runs a command without waiting on it, resolving to its output, or undefined if it failed or timed out. */
+function capture(command: string, args: string[], timeout: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(command, args, { windowsHide: true, timeout, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      return resolve(undefined);
+    }
+    let out = "";
+    child.stdout!.setEncoding("utf8").on("data", (d: string) => (out += d));
+    child.once("error", () => resolve(undefined));
+    child.once("close", (code) => resolve(code === 0 ? out : undefined));
+  });
+}
+
+/**
+ * Every running process with its parent and start time (Windows), and, with `withBoot`, when the machine last booted
+ * (ms since epoch, undefined if it can't be told). One PowerShell for both, since starting one takes a while.
+ * Undefined if PowerShell failed.
+ */
+async function windowsProcesses(withBoot = false): Promise<{ table: ProcessEntry[]; booted?: number } | undefined> {
+  const script = [
+    ...(withBoot ? [`"boot $((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o'))"`] : []),
+    `Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`,
+  ].join("; ");
+  const out = await capture("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 20_000);
+  if (out === undefined) return undefined;
   const table: ProcessEntry[] = [];
-  const script = `Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`;
-  const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
-  for (const line of (r.stdout ?? "").split(/\r?\n/)) {
-    const [pid, ppid, iso] = line.trim().split(" ");
-    if (pid && ppid && iso) table.push({ pid: Number(pid), ppid: Number(ppid), started: Date.parse(iso) });
+  let booted: number | undefined;
+  for (const line of out.split(/\r?\n/)) {
+    const [a, b, c] = line.trim().split(" ");
+    if (a === "boot") {
+      const t = Date.parse(b ?? "");
+      if (!Number.isNaN(t)) booted = t;
+    } else if (a && b && c) table.push({ pid: Number(a), ppid: Number(b), started: Date.parse(c) });
   }
-  return table;
+  return { table, booted };
 }
 
 interface GroupEntry {
@@ -432,13 +464,13 @@ function parseEtime(etime: string): number {
 }
 
 /** Every running process with its process group and start time (Unix), or undefined if ps failed. */
-function processGroups(): GroupEntry[] | undefined {
+async function processGroups(): Promise<GroupEntry[] | undefined> {
   // One -o per column: in "pid=,pgid=,etime=" everything after the first "=" is pid's header text.
-  const r = spawnSync("ps", ["-A", "-o", "pid=", "-o", "pgid=", "-o", "etime="], { encoding: "utf8", timeout: 20_000 });
-  if (r.error || r.status !== 0) return undefined;
+  const out = await capture("ps", ["-A", "-o", "pid=", "-o", "pgid=", "-o", "etime="], 20_000);
+  if (out === undefined) return undefined;
   const now = Date.now();
   const table: GroupEntry[] = [];
-  for (const line of (r.stdout ?? "").split("\n")) {
+  for (const line of out.split("\n")) {
     const [pid, pgid, etime] = line.trim().split(/\s+/);
     const elapsed = parseEtime(etime ?? "");
     if (pid && pgid && !Number.isNaN(elapsed)) table.push({ pid: Number(pid), pgid: Number(pgid), started: now - elapsed * 1000 });
@@ -446,22 +478,16 @@ function processGroups(): GroupEntry[] | undefined {
   return table;
 }
 
-/** When the machine last booted, ms since epoch, or undefined if it can't be told. */
-function bootTime(): number | undefined {
-  if (process.platform === "win32") {
-    const script = "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')";
-    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
-    const t = Date.parse((r.stdout ?? "").trim());
-    return Number.isNaN(t) ? undefined : t;
-  }
+/** When the machine last booted (Unix), ms since epoch, or undefined if it can't be told. Windows: see windowsProcesses. */
+async function bootTime(): Promise<number | undefined> {
   try {
     const uptime = Number(fs.readFileSync("/proc/uptime", "utf8").split(" ")[0]);
     if (uptime > 0) return Date.now() - uptime * 1000;
   } catch {
     // Not Linux.
   }
-  const r = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 5_000 }); // macOS / BSD: "{ sec = 1700000000, usec = 0 } ..."
-  const sec = Number(/sec = (\d+)/.exec(r.stdout ?? "")?.[1]);
+  const out = await capture("sysctl", ["-n", "kern.boottime"], 5_000); // macOS / BSD: "{ sec = 1700000000, usec = 0 } ..."
+  const sec = Number(/sec = (\d+)/.exec(out ?? "")?.[1]);
   return sec > 0 ? sec * 1000 : undefined;
 }
 
@@ -522,9 +548,8 @@ function leftoverGroup(table: GroupEntry[], leader: number, startedAt: number): 
 
 /** A dev server written down by the previous dashboard process, reattached if it's still running. */
 function leftoverServer(r: RunningRecord, live: number[] | undefined, started?: Map<number, number>): DevServer {
-  const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
+  const s = sweptServer(r.projectId);
   s.info = { projectId: r.projectId, status: live ? "running" : "stopped", script: r.script, command: r.command, startedAt: r.startedAt };
-  servers.set(r.projectId, s);
   push(s, "system", `$ ${r.command ?? "(dev server)"}`);
   // Separate files, so the two streams' backlogs can't be interleaved; everything after this point arrives in order.
   const outEnd = readBacklog(s, "stdout");
@@ -539,10 +564,24 @@ function leftoverServer(r: RunningRecord, live: number[] | undefined, started?: 
     s.info.finishedAt = new Date().toISOString();
     push(s, "system", "Exited while the dashboard was down.");
   }
+  changed(s);
   return s;
 }
 
-function adoptLeftovers() {
+/**
+ * The entry for a project's leftover dev server. A Dev tab opened while the sweep ran may have made one already
+ * (devLogStream); it's reused, so that tab hears about the leftover.
+ */
+function sweptServer(projectId: number): DevServer {
+  let s = servers.get(projectId);
+  if (!s) {
+    s = { info: emptyStatus(projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
+    servers.set(projectId, s);
+  }
+  return s;
+}
+
+async function adoptLeftovers() {
   let records: RunningRecord[];
   try {
     records = JSON.parse(fs.readFileSync(runningFile, "utf8")) as RunningRecord[];
@@ -550,13 +589,15 @@ function adoptLeftovers() {
     return;
   }
   if (!Array.isArray(records)) return saveRunning([]);
+  const windows = process.platform === "win32";
+  const snapshot = windows ? await windowsProcesses(true) : undefined;
+  if (windows && !snapshot) return; // Keep the records so the next start can try again.
   // A dev server started before the last boot is long gone, and its PIDs may now belong to anything.
-  const booted = bootTime();
+  const booted = windows ? snapshot!.booted : await bootTime();
   if (booted !== undefined) records = records.filter((r) => Date.parse(r.startedAt) > booted);
   if (!records.length) return saveRunning([]);
-  const windows = process.platform === "win32";
-  const table = windows ? processTable() : [];
-  const groups = windows ? [] : processGroups();
+  const table = snapshot?.table ?? [];
+  const groups = windows ? [] : await processGroups();
   if (!groups) return; // Keep the records so the next start can try again.
   const startedByPid = new Map(table.map((p) => [p.pid, p.started]));
   for (const r of records) {
@@ -575,15 +616,17 @@ function adoptLeftovers() {
     if (!pids.length) continue;
     if (windows) for (const pid of pids) killTree(pid);
     else killGroup(r.pid);
-    const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
+    const s = sweptServer(r.projectId);
     s.info = { projectId: r.projectId, status: "stopped", script: r.script, command: r.command, startedAt: r.startedAt, finishedAt: new Date().toISOString() };
-    servers.set(r.projectId, s);
     push(s, "system", `Stopped ${r.command ?? "the dev server"} (pid ${r.pid}), left running when the dashboard last shut down.`);
+    changed(s);
   }
   saveRunning();
 }
 
-adoptLeftovers();
+// Reattach to (or stop) the dev servers left by the previous dashboard process. Its PowerShell / ps calls run in the
+// background so the server can start listening meanwhile; starting or stopping a dev server waits for it.
+const leftoversAdopted: Promise<void> = adoptLeftovers().catch((err) => console.error("Adopting leftover dev servers:", err));
 
 /**
  * NDJSON stream for the Dev tab: `{"type":"status",...}` first and whenever it changes, then a `{"type":"log",...}`

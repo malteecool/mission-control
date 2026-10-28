@@ -237,13 +237,13 @@ app.post("/api/projects/:id/dev/start", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { script?: unknown };
   if (typeof body.script !== "string" || !body.script) throw new HttpError(400, "script is required");
   try {
-    return c.json(startDevServer(p.id, p.path, body.script), 201);
+    return c.json(await startDevServer(p.id, p.path, body.script), 201);
   } catch (err) {
     throw new HttpError(409, (err as Error).message);
   }
 });
 
-app.post("/api/projects/:id/dev/stop", (c) => c.json({ stopped: stopDevServer(projectOr404(c.req.param("id")).id) }));
+app.post("/api/projects/:id/dev/stop", async (c) => c.json({ stopped: await stopDevServer(projectOr404(c.req.param("id")).id) }));
 
 app.delete("/api/projects/:id/dev/logs", (c) => {
   clearDevLogs(projectOr404(c.req.param("id")).id);
