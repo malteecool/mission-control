@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PermissionMode, Project } from "./types.ts";
 
-const dataDir = path.resolve(import.meta.dirname, "../data");
+export const dataDir = path.resolve(import.meta.dirname, "../data");
 fs.mkdirSync(dataDir, { recursive: true });
 
 export const db = new DatabaseSync(path.join(dataDir, "dashboard.db"));

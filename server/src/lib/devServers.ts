@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { dataDir } from "../db.ts";
 import type { DevLogLine, DevServerInfo, DevServerStatus } from "../types.ts";
 
 type Listener = (line: DevLogLine | null) => void; // null: state changed (started, URL found, exited)
@@ -127,6 +128,7 @@ export function startDevServer(projectId: number, dir: string, script: string): 
   });
   s.child = child;
   s.info.pid = child.pid;
+  saveRunning();
   const out = lineReader((t) => push(s, "stdout", t));
   const err = lineReader((t) => push(s, "stderr", t));
   child.stdout?.on("data", (c: Buffer) => out.write(c));
@@ -137,6 +139,7 @@ export function startDevServer(projectId: number, dir: string, script: string): 
     err.flush();
     if (s.child !== child) return;
     s.child = undefined;
+    saveRunning();
     s.info = {
       ...s.info,
       status: s.stopRequested || code === 0 ? "stopped" : "crashed",
@@ -152,14 +155,18 @@ export function startDevServer(projectId: number, dir: string, script: string): 
 }
 
 /** Kills the dev command and everything it started (a dev server is usually a few processes deep). */
-function killTree(child: ChildProcess) {
-  if (!child.pid) return;
-  if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+function killTree(pid: number | undefined) {
+  if (!pid) return;
+  if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
   else {
     try {
-      process.kill(-child.pid, "SIGTERM");
+      process.kill(-pid, "SIGTERM");
     } catch {
-      child.kill();
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
     }
   }
 }
@@ -169,14 +176,117 @@ export function stopDevServer(projectId: number): boolean {
   if (!s?.child) return false;
   s.stopRequested = true;
   push(s, "system", "Stopping…");
-  killTree(s.child);
+  killTree(s.child.pid);
   return true;
 }
 
 // Don't leave dev servers holding their ports after the dashboard goes away (claudeRunner turns signals into exit).
 process.on("exit", () => {
-  for (const s of servers.values()) if (s.child) killTree(s.child);
+  for (const s of servers.values()) if (s.child) killTree(s.child.pid);
+  saveRunning([]);
 });
+
+// The exit handler doesn't run when the server is killed outright (TerminateProcess on Windows, which is how
+// scripts/dev.mjs restarts it there, or SIGKILL), so the running dev servers are also written down and any left
+// over are stopped on the next start. They can't be re-adopted: their output went to pipes that died with us.
+const runningFile = path.join(dataDir, "dev-servers.json");
+
+interface RunningRecord {
+  projectId: number;
+  pid: number;
+  startedAt: string;
+  command?: string;
+  script?: string;
+}
+
+function saveRunning(records = [...servers.values()].flatMap((s): RunningRecord[] =>
+  s.child?.pid && s.info.startedAt
+    ? [{ projectId: s.info.projectId, pid: s.child.pid, startedAt: s.info.startedAt, command: s.info.command, script: s.info.script }]
+    : [],
+)) {
+  try {
+    if (records.length) fs.writeFileSync(runningFile, JSON.stringify(records, null, 2));
+    else fs.rmSync(runningFile, { force: true });
+  } catch {
+    // Best effort; worst case a leftover dev server isn't cleaned up next time.
+  }
+}
+
+interface ProcessEntry {
+  pid: number;
+  ppid: number;
+  /** When it started, ms since epoch. */
+  started: number;
+}
+
+/** Every running process with its parent and start time. */
+function processTable(): ProcessEntry[] {
+  const table: ProcessEntry[] = [];
+  if (process.platform === "win32") {
+    const script = `Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString('o'))" }`;
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+    for (const line of (r.stdout ?? "").split(/\r?\n/)) {
+      const [pid, ppid, iso] = line.trim().split(" ");
+      if (pid && ppid && iso) table.push({ pid: Number(pid), ppid: Number(ppid), started: Date.parse(iso) });
+    }
+  } else {
+    const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,etimes="], { encoding: "utf8", timeout: 20_000 });
+    for (const line of (r.stdout ?? "").split("\n")) {
+      const [pid, ppid, elapsed] = line.trim().split(/\s+/);
+      if (pid && ppid && elapsed) table.push({ pid: Number(pid), ppid: Number(ppid), started: Date.now() - Number(elapsed) * 1000 });
+    }
+  }
+  return table;
+}
+
+/**
+ * The processes still running from a dev server started as `root` at `startedAt`. The root itself is often gone
+ * (on Windows the outer cmd.exe dies with us while npm's children live on), but Windows keeps each process's parent
+ * PID after the parent exits, so the rest can still be found. Start times guard against reused PIDs: the root must
+ * have started when ours did, and every descendant after its parent.
+ */
+function leftoverTree(table: ProcessEntry[], root: number, startedAt: number): number[] {
+  const SLACK = 10_000; // Clock and timestamp rounding between our record and the OS.
+  const byPid = new Map(table.map((p) => [p.pid, p]));
+  const live = byPid.get(root);
+  if (live && Math.abs(live.started - startedAt) > SLACK) return []; // The PID belongs to something else now.
+  const found: number[] = live ? [root] : [];
+  const queue = [{ pid: root, started: live?.started ?? startedAt }];
+  while (queue.length) {
+    const parent = queue.shift()!;
+    for (const p of table) {
+      if (p.ppid !== parent.pid || p.pid === parent.pid || p.started < parent.started - SLACK || found.includes(p.pid)) continue;
+      found.push(p.pid);
+      queue.push(p);
+    }
+  }
+  return found;
+}
+
+function stopLeftovers() {
+  let records: RunningRecord[];
+  try {
+    records = JSON.parse(fs.readFileSync(runningFile, "utf8")) as RunningRecord[];
+  } catch {
+    return;
+  }
+  if (!Array.isArray(records) || !records.length) return saveRunning([]);
+  const table = processTable();
+  for (const r of records) {
+    const pids = leftoverTree(table, r.pid, Date.parse(r.startedAt));
+    if (!pids.length) continue;
+    // On Unix the dev server is its own process group, which outlives its leader; elsewhere kill each surviving branch.
+    if (process.platform === "win32") for (const pid of pids) killTree(pid);
+    else killTree(r.pid);
+    const s: DevServer = { info: emptyStatus(r.projectId), logs: [], nextSeq: 0, listeners: new Set(), stopRequested: false };
+    s.info = { projectId: r.projectId, status: "stopped", script: r.script, command: r.command, startedAt: r.startedAt, finishedAt: new Date().toISOString() };
+    servers.set(r.projectId, s);
+    push(s, "system", `Stopped ${r.command ?? "the dev server"} (pid ${r.pid}), left running when the dashboard last shut down.`);
+  }
+  saveRunning([]);
+}
+
+stopLeftovers();
 
 /**
  * NDJSON stream for the Dev tab: `{"type":"status",...}` first and whenever it changes, then a `{"type":"log",...}`
