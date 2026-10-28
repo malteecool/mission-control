@@ -271,31 +271,49 @@ async function prepare(project: Project, taskId: string, paths?: string[]) {
 
 /**
  * Commits the chosen files (default: all) exactly as the task left them, on top of HEAD. Builds the commit in a
- * scratch index so anything else you have staged stays out of it; your hooks still run.
+ * scratch index so anything else you have staged stays out of it; your hooks still run. Skips any file that HEAD or
+ * your working tree has changed again since the task finished, so later work isn't overwritten.
  */
 export function commitChanges(project: Project, taskId: string, message: string, paths?: string[]) {
   return withLock(taskId, async () => {
     const { repo, review, end, chosen, task } = await prepare(project, taskId, paths);
     const root = repo.root;
-    const want = await entries(root, end, new Set(chosen));
-    const info = indexInfo(chosen, want, "0".repeat(end.length));
+    const set = new Set(chosen);
     const before = await head(root);
+    const none = new Map<string, string>();
+    const [was, want, start, last, now] = await Promise.all([
+      entries(root, review.base, set),
+      entries(root, end, set),
+      review.head ? entries(root, review.head, set) : none,
+      before ? entries(root, before, set) : none,
+      snapshot(root).then((cur) => entries(root, cur, set)),
+    ]);
+    // Changed by someone else since the task started. HEAD is compared with HEAD back then too, since your
+    // uncommitted edits at that point are part of `was` and needn't match HEAD.
+    const later = (m: Map<string, string>, p: string, ...also: Map<string, string>[]) =>
+      ![was, want, ...also].some((o) => o.get(p) === m.get(p));
+    const done = chosen.filter((p) => last.get(p) === want.get(p) || !(later(last, p, start) || later(now, p)));
+    const skipped = chosen.filter((p) => !done.includes(p));
+    const commit = done.filter((p) => last.get(p) !== want.get(p));
+    const info = indexInfo(commit, want, "0".repeat(end.length));
 
-    const committed = await withTempIndex(null, async (index) => {
-      await mustGit(root, before ? ["read-tree", before] : ["read-tree", "--empty"], { index });
-      await mustGit(root, ["update-index", "-z", "--index-info"], { index, input: info });
-      const tree = (await mustGit(root, ["write-tree"], { index })).trim();
-      if (before && tree === (await mustGit(root, ["rev-parse", `${before}^{tree}`])).trim()) return false;
-      await mustGit(root, ["commit", "-q", "-m", message], { index, timeout: 120_000 });
-      return true;
-    });
+    const committed =
+      commit.length > 0 &&
+      (await withTempIndex(null, async (index) => {
+        await mustGit(root, before ? ["read-tree", before] : ["read-tree", "--empty"], { index });
+        await mustGit(root, ["update-index", "-z", "--index-info"], { index, input: info });
+        const tree = (await mustGit(root, ["write-tree"], { index })).trim();
+        if (before && tree === (await mustGit(root, ["rev-parse", `${before}^{tree}`])).trim()) return false;
+        await mustGit(root, ["commit", "-q", "-m", message], { index, timeout: 120_000 });
+        return true;
+      }));
     // Line your index up with the new commit for these files, so `git status` doesn't show them as staged changes.
     if (committed) await mustGit(root, ["update-index", "-z", "--index-info"], { input: info });
 
-    const base = await treeWith(root, review.base, chosen, want);
+    const base = done.length ? await treeWith(root, review.base, done, want) : review.base;
     const left = (await changedFiles(repo, base, end)).length;
     await updateTask(project.path, task.id, { review: left ? { ...review, end, base } : undefined });
-    return { commit: committed ? (await head(root))?.slice(0, 12) : undefined, files: chosen.length };
+    return { commit: committed ? (await head(root))?.slice(0, 12) : undefined, files: commit.length, skipped };
   });
 }
 
@@ -389,8 +407,7 @@ export function mergeTask(project: Project, taskId: string, message: string) {
 
 /** The remote to push to (origin if there is one), and whether it's on GitHub. */
 async function remoteInfo(cwd: string): Promise<{ remote?: string; github?: boolean }> {
-  const names = (await git(cwd, ["remote"])).stdout.split("
-").map((s) => s.trim()).filter(Boolean);
+  const names = (await git(cwd, ["remote"])).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   const remote = names.includes("origin") ? "origin" : names[0];
   if (!remote) return {};
   const url = (await git(cwd, ["remote", "get-url", remote])).stdout.trim();
@@ -459,8 +476,7 @@ function prBody(task: Task, base: string): string {
         ]
       : []),
     `Opened from the Mission Control task board (branch \`${task.worktree?.branch}\` into \`${base}\`).`,
-  ].join("
-");
+  ].join("\n");
 }
 
 /**
@@ -482,11 +498,10 @@ export function openPullRequest(project: Project, taskId: string, message: strin
     const created = await gh(main.root, [
       "pr", "create", "--head", wt.branch, "--base", base, "--title", (title || task.title).slice(0, 250), "--body-file", "-",
     ], { input: prBody(task, base) });
-    const out = `${created.stdout}
-${created.stderr}`;
-    const url = /https:\/\/\S+\/pull\/\d+/.exec(out)?.[0];
+    // gh prints the new PR's URL, or names the existing one when the branch already has a PR.
+    const url = /https:\/\/\S+\/pull\/\d+/.exec(`${created.stdout}\n${created.stderr}`)?.[0];
     if (!url) {
-      if (/not found|ENOENT|is not recognized/i.test(created.stderr))
+      if (/ENOENT|is not recognized/i.test(created.stderr))
         throw new ReviewError(409, "Pushed the branch, but the GitHub CLI (gh) isn't installed or isn't on PATH, so no pull request was opened.");
       throw new ReviewError(409, `Pushed the branch, but gh pr create failed: ${created.stderr.trim() || "unknown error"}`);
     }
