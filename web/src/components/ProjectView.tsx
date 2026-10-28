@@ -235,6 +235,23 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
             <label className="flex cursor-pointer items-start gap-2.5">
               <input
                 type="checkbox"
+                checked={p.featureBranches}
+                onChange={(e) => update.mutate({ featureBranches: e.target.checked })}
+                disabled={!p.git.isRepo}
+                className="mt-0.5 accent-[var(--accent)]"
+              />
+              <span className={clsx("text-sm", p.git.isRepo ? "text-slate-200" : "text-slate-500")}>
+                Give feature tasks their own branch
+                <span className="block text-xs text-slate-500">
+                  {p.git.isRepo
+                    ? "Feature tasks work in their own worktree on a feature/… branch, so your checkout stays where it is. Review them to merge, or to commit, push and open a pull request."
+                    : "Needs the project to be a git repository."}
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
                 checked={p.autoReview}
                 onChange={(e) => update.mutate({ autoReview: e.target.checked })}
                 className="mt-0.5 accent-[var(--accent)]"

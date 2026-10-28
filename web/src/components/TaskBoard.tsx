@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import clsx from "clsx";
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Repeat, ScanSearch, Sparkles, Square, StepForward, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, FileDiff, GitBranch, GitPullRequest, ListTodo, MessageSquare, NotebookPen, Pencil, Play, Plus, Repeat, ScanSearch, Sparkles, Square, StepForward, Trash2 } from "lucide-react";
 import { api, type ChangeSummary, type RunInfo, type Task, type TaskKind, type TaskPriority, type TaskStatus, type UsageTotals } from "../lib/api.ts";
 import { navigate } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
@@ -259,6 +259,7 @@ export function TaskBoard({ projectId }: { projectId: number }) {
                       board={tasks.data ?? []}
                       onRunReviewer={() => runReviewer(t.id)}
                       onOpenReviewerSession={openReviewerSession}
+                      onOpenPr={attempt(() => api.openPr(projectId, t.id))}
                       usage={usageByTask.get(t.id)}
                       changes={t.review ? changesByTask.get(t.id) : undefined}
                       onReview={() => setReviewing(t.id)}
@@ -312,6 +313,7 @@ function TaskCard({
   board,
   onRunReviewer,
   onOpenReviewerSession,
+  onOpenPr,
   usage,
   changes,
   onReview,
@@ -341,6 +343,7 @@ function TaskCard({
   board: Task[];
   onRunReviewer: () => void;
   onOpenReviewerSession: (sessionId: string) => void;
+  onOpenPr: () => void;
   usage?: UsageTotals;
   changes?: ChangeSummary;
   onReview: () => void;
@@ -365,6 +368,11 @@ function TaskCard({
     !done && !run && { label: planning ? "Start planning" : "Start Claude session", icon: <Play size={14} />, onSelect: onStart },
     !done && !run && !!t.sessionId && { label: "Resume session", icon: <StepForward size={14} />, onSelect: onResume },
     run && { label: "Stop run", icon: <Square size={13} />, onSelect: () => onStop(run) },
+    t.pr && {
+      label: `Open pull request${t.pr.number ? ` #${t.pr.number}` : ""}`,
+      icon: <GitPullRequest size={14} />,
+      onSelect: onOpenPr,
+    },
     reviewerRun && { label: "Watch the review agent", icon: <ScanSearch size={14} />, onSelect: () => onOpenRun(reviewerRun) },
     done && !reviewerRun && {
       label: t.reviewer ? "Review again" : "Run review agent",
@@ -497,6 +505,19 @@ function TaskCard({
             <span className="text-slate-500" title={`Works in its own worktree on ${t.worktree.branch}`}>
               <GitBranch size={10} />
             </span>
+          )}
+          {t.pr && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenPr();
+              }}
+              className="inline-flex items-center gap-0.5 rounded bg-violet-400/10 px-1 font-mono text-[10px] text-violet-300 hover:bg-violet-400/20"
+              title={`Pull request: ${t.pr.branch} → ${t.pr.base}. Click to open it.`}
+            >
+              <GitPullRequest size={10} />
+              {t.pr.number ? `#${t.pr.number}` : "PR"}
+            </button>
           )}
           <span className="font-mono text-[10px] text-slate-600">{timeAgo(done ? t.doneAt : t.updatedAt)}</span>
           {usage && (

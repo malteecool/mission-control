@@ -257,28 +257,80 @@
       "id": "c0e5ccb0-ae6d-404c-a45d-27e2b1f35faf",
       "title": "Tighten PID-reuse check when stopping leftover dev servers",
       "notes": "In leftoverTree (server/src/lib/devServers.ts), when the recorded top process is no longer running, only accept direct children that started within ~60 s after the recorded startedAt. Also skip all records if the machine booted after startedAt (Win32_OperatingSystem.LastBootUpTime, or /proc/uptime). This stops taskkill /T /F from hitting unrelated processes that reused the PID after a reboot or long outage.",
-      "status": "todo",
+      "status": "done",
       "kind": "bug",
       "priority": 1,
       "createdAt": "2026-10-28T18:15:27.834Z",
-      "updatedAt": "2026-10-28T18:15:27.834Z",
+      "updatedAt": "2026-10-28T18:21:04.605Z",
       "origin": {
         "taskId": "d8212040-66fd-4810-a8b5-73031288dcee",
         "title": "Dev servers survive dashboard restarts on Windows"
+      },
+      "sessionId": "00c8aa90-60da-4c09-84af-833e8482a513",
+      "doneAt": "2026-10-28T18:18:47.049Z",
+      "reviewer": {
+        "runId": "191bedac-be6a-4b41-8531-a78d09aa1e93",
+        "sessionId": "073bef72-7c88-4e24-86d8-1c2041fcf102",
+        "startedAt": "2026-10-28T18:18:47.370Z",
+        "finishedAt": "2026-10-28T18:19:33.723Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "The child-start window and boot-time filter are correct and fail safe; after a reboot or long outage, unrelated processes that reuse the PIDs are no longer touched. Minor gaps: Windows Fast Startup doesn't update LastBootUpTime, and the sweep now starts PowerShell twice, synchronously, at startup.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "On Windows with Fast Startup (on by default in Windows 11 Home), 'Shut down' doesn't update LastBootUpTime even though all user processes die, so the boot filter misses the most common shutdown on Windows. The 60 s child window still prevents wrong kills, so this is only a weaker guard than the comment suggests.",
+            "file": "server/src/lib/devServers.ts:245"
+          },
+          {
+            "severity": "low",
+            "text": "stopLeftovers runs synchronously at module load and now starts powershell.exe twice (bootTime, then processTable), each with a 20 s timeout. That adds about 0.5-1 s, or up to 40 s in the worst case, of blocked server startup whenever a record file exists. Both values could come from one PowerShell call.",
+            "file": "server/src/lib/devServers.ts:297"
+          }
+        ],
+        "followUps": [
+          "71aac0f2-e895-4406-aa91-1c7fc99b8ef5"
+        ]
       }
     },
     {
       "id": "fd63ffe3-3fcc-456e-807f-761c4c56c3c8",
       "title": "Make leftover dev-server cleanup work on Unix",
       "notes": "stopLeftovers in server/src/lib/devServers.ts only kills the process group if leftoverTree finds a live process, but orphaned children are reparented to PID 1 and macOS ps has no etimes. Look up surviving members by process group ID (ps -o pid=,pgid=,etime=) and kill the group when any member matches the recorded start time.",
-      "status": "todo",
+      "status": "done",
       "kind": "bug",
       "priority": 3,
       "createdAt": "2026-10-28T18:15:27.842Z",
-      "updatedAt": "2026-10-28T18:15:27.842Z",
+      "updatedAt": "2026-10-28T18:25:06.149Z",
       "origin": {
         "taskId": "d8212040-66fd-4810-a8b5-73031288dcee",
         "title": "Dev servers survive dashboard restarts on Windows"
+      },
+      "sessionId": "6e8250f2-5ecc-4414-8faf-362a01ec819e",
+      "doneAt": "2026-10-28T18:22:38.541Z",
+      "reviewer": {
+        "runId": "8b347e80-4e7b-4f8d-9915-92eead5fab8e",
+        "sessionId": "1d37aead-ceb7-4165-ae89-a3907f82a6a6",
+        "startedAt": "2026-10-28T18:22:38.817Z",
+        "finishedAt": "2026-10-28T18:23:57.158Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "Finding leftover dev servers by process group is the right fix for orphans reparented to init, and the start-time check is sound. But the ps call most likely uses `-o pid=,pgid=,etime=`, which POSIX/BSD ps reads as a single pid column with a custom header, so the Unix cleanup would quietly find nothing.",
+        "findings": [
+          {
+            "severity": "high",
+            "text": "In POSIX `ps -o`, everything after `=` is header text, so `pid=,pgid=,etime=` most likely gives one pid column headed ',pgid=,etime=' (BSD/macOS ps does this, and procps-ng's man page also uses a separate -o per renamed column). Then every row lacks etime, parseEtime returns NaN, processGroups() is empty, leftoverGroup never matches, and the record is deleted without killing anything. The old `pid=,ppid=,etimes=` call had the same flaw. Pass each column as its own flag: [\"-A\", \"-o\", \"pid=\", \"-o\", \"pgid=\", \"-o\", \"etime=\"]. Not checked on a real Unix box.",
+            "file": "server/src/lib/devServers.ts:260"
+          },
+          {
+            "severity": "low",
+            "text": "If ps fails (missing, timed out, or errored), processGroups() returns [] and stopLeftovers treats that as 'nothing left over', then deletes dev-servers.json. Check r.error/r.status and keep the file so the next start can try again.",
+            "file": "server/src/lib/devServers.ts:343"
+          }
+        ],
+        "followUps": [
+          "1df853c7-2bf3-424a-b691-016252d04dec"
+        ]
       }
     },
     {
@@ -294,6 +346,44 @@
         "taskId": "d8212040-66fd-4810-a8b5-73031288dcee",
         "title": "Dev servers survive dashboard restarts on Windows"
       }
+    },
+    {
+      "id": "71aac0f2-e895-4406-aa91-1c7fc99b8ef5",
+      "title": "Keep the leftover dev-server sweep from blocking server startup",
+      "notes": "In server/src/lib/devServers.ts, stopLeftovers() runs at import time and makes two blocking spawnSync('powershell.exe') calls (bootTime at line ~246, processTable at line ~227). Get LastBootUpTime and the Win32_Process table from one PowerShell script, and run the sweep asynchronously (spawn instead of spawnSync, or defer with setImmediate) so the dashboard server can start listening right away. If the sweep becomes async, make sure startDevServer for a project waits for it, or skips that project's record, so a fresh start isn't killed.",
+      "status": "todo",
+      "kind": "chore",
+      "priority": 3,
+      "createdAt": "2026-10-28T18:19:33.724Z",
+      "updatedAt": "2026-10-28T18:19:33.724Z",
+      "origin": {
+        "taskId": "c0e5ccb0-ae6d-404c-a45d-27e2b1f35faf",
+        "title": "Tighten PID-reuse check when stopping leftover dev servers"
+      }
+    },
+    {
+      "id": "1df853c7-2bf3-424a-b691-016252d04dec",
+      "title": "Fix the ps column flags in the Unix leftover sweep",
+      "notes": "In server/src/lib/devServers.ts processGroups(), replace `-o pid=,pgid=,etime=` with separate `-o pid= -o pgid= -o etime=` flags. Under POSIX/BSD rules, text after `=` is header text, so the current form probably yields only a pid column and the sweep never matches anything. While there, if spawnSync reports r.error or a non-zero status, return early from stopLeftovers without calling saveRunning([]), so the records survive for the next start. Check it on macOS and Linux by starting a dev server, SIGKILLing the dashboard, and restarting it.",
+      "status": "doing",
+      "kind": "bug",
+      "priority": 1,
+      "createdAt": "2026-10-28T18:23:57.159Z",
+      "updatedAt": "2026-10-28T18:25:39.963Z",
+      "origin": {
+        "taskId": "fd63ffe3-3fcc-456e-807f-761c4c56c3c8",
+        "title": "Make leftover dev-server cleanup work on Unix"
+      },
+      "review": {
+        "base": "89dcb0672b9c77692f46c3d989b132af13e67535",
+        "head": "dfce539664e730d3b91e81b4568add01b98bc4a3",
+        "startedAt": "2026-10-28T18:25:10.693Z",
+        "end": "d6f56fbc90bc4b13c45c0e58b07c2aad34dcdd81",
+        "endHead": "dfce539664e730d3b91e81b4568add01b98bc4a3"
+      },
+      "sessionId": "23b01c95-4f0d-40f2-82ce-1f364ec92283",
+      "agentStatus": "blocked",
+      "agentNote": "need someone to run the SIGKILL/restart check on macOS and Linux (no Mac here, and WSL has no Node)"
     }
   ]
 }

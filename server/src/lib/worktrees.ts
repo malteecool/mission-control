@@ -1,6 +1,7 @@
-// Parallel task runs: in a project with parallelTasks on, each task gets its own git worktree and branch under
-// <project>/.claude/worktrees/, so several Claude sessions can work at once without editing the same files.
-// Reviewing such a task means merging its branch. Claude Code keeps the sessions of .claude/worktrees/* checkouts
+// Tasks on their own branch: in a project with parallelTasks on, each task gets its own git worktree and branch under
+// <project>/.claude/worktrees/, so several Claude sessions can work at once without editing the same files. With
+// featureBranches on, feature tasks get one too (on a feature/… branch), so your checkout never switches branches.
+// Reviewing such a task means merging its branch, or pushing it and opening a pull request. Claude Code keeps the sessions of .claude/worktrees/* checkouts
 // next to the project's own, so History and "Open session" find them, and replies continue in the worktree.
 import fs from "node:fs";
 import path from "node:path";
@@ -33,6 +34,10 @@ async function excludeWorktrees(repo: Repo) {
   fs.appendFileSync(file, `${current && !current.endsWith("\n") ? "\n" : ""}# Task worktrees made by the project dashboard\n${line}\n`);
 }
 
+/** Whether a fresh run of the task should get its own worktree and branch. */
+export const wantsOwnBranch = (project: Project, task: Task) =>
+  project.parallelTasks || (project.featureBranches && task.kind === "feature");
+
 /**
  * Creates the task's worktree on a new branch from the main checkout's HEAD (or on the task's existing branch, left
  * over from an earlier attempt). Undefined when the project isn't in a git repository with at least one commit.
@@ -46,7 +51,7 @@ export async function createWorktree(project: Project, task: Task): Promise<Task
 
   const id = task.id.slice(0, 8);
   const root = path.join(project.path, WORKTREES, `task-${id}`);
-  const branch = `task/${slug(task.title) || "task"}-${id}`;
+  const branch = `${task.kind === "feature" ? "feature" : "task"}/${slug(task.title) || "task"}-${id}`;
   if (!fs.existsSync(root)) {
     const exists = (await git(repo.root, ["rev-parse", "-q", "--verify", `refs/heads/${branch}`])).ok;
     await git(repo.root, ["worktree", "prune"]);

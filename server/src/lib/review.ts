@@ -2,14 +2,14 @@
 // snapshotted as a git tree object (through a throwaway index, so your own index is never touched); when it ends,
 // again. The card's review shows the diff between the two, so edits made by you or other tasks in between or
 // afterwards don't show up, and Commit / Revert act on exactly what the task's sessions wrote. A task with its own
-// worktree (worktrees.ts) is snapshotted there instead, and reviewing it ends in Merge (its branch into yours) or
-// Discard.
+// worktree (worktrees.ts) is snapshotted there instead, and reviewing it ends in Merge (its branch into yours),
+// Open PR (push the branch and open a pull request with the gh CLI) or Discard.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChangeSummary, ChangedFile, Project, Task, TaskChanges, TaskReview } from "../types.ts";
-import { git, mustGit, repoFor, type Repo } from "./git.ts";
+import type { ChangeSummary, ChangedFile, Project, Task, TaskChanges, TaskPullRequest, TaskReview } from "../types.ts";
+import { gh, git, mustGit, repoFor, type Repo } from "./git.ts";
 import { TASK_FILE, getTask, readTasks, updateTask } from "./tasks.ts";
 import { commitWorktree, importFollowUps, removeWorktree } from "./worktrees.ts";
 
@@ -164,7 +164,9 @@ export async function taskChanges(project: Project, taskId: string): Promise<Tas
   const task = await getTask(project.path, taskId);
   if (!task) throw new ReviewError(404, "Task not found");
   const r = await resolve(project, task);
-  const branches = task.worktree ? { branch: task.worktree.branch, into: await currentBranch(project.path) } : {};
+  const branches = task.worktree
+    ? { branch: task.worktree.branch, into: await currentBranch(project.path), ...(await remoteInfo(project.path)) }
+    : {};
   if (!r) return { taskId, files: [], live: false, commits: [], ...branches };
   if (!(await objectsExist(r.repo.root, r.review.base, r.end)))
     return { taskId, files: [], live: r.live, commits: [], since: r.review.startedAt, missing: true, ...branches };
@@ -382,6 +384,114 @@ export function mergeTask(project: Project, taskId: string, message: string) {
     await removeWorktree(project, wt, { deleteBranch: true }).catch((err) => console.error("Removing worktree:", err));
     await updateTask(project.path, task.id, { worktree: undefined, review: undefined });
     return { commit: after && after !== before ? after.slice(0, 12) : undefined, branch: wt.branch, into };
+  });
+}
+
+/** The remote to push to (origin if there is one), and whether it's on GitHub. */
+async function remoteInfo(cwd: string): Promise<{ remote?: string; github?: boolean }> {
+  const names = (await git(cwd, ["remote"])).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  const remote = names.includes("origin") ? "origin" : names[0];
+  if (!remote) return {};
+  const url = (await git(cwd, ["remote", "get-url", remote])).stdout.trim();
+  return { remote, github: /github\.com[:/]/i.test(url) };
+}
+
+async function branchTask(project: Project, taskId: string) {
+  const task = await getTask(project.path, taskId);
+  if (!task) throw new ReviewError(404, "Task not found");
+  const wt = task.worktree;
+  if (!wt) throw new ReviewError(400, "This task doesn't have its own branch");
+  return { task, wt };
+}
+
+/** Commits what the worktree has uncommitted onto the task's branch; returns the new commit, if there was anything. */
+async function commitOnBranch(project: Project, task: Task, message: string): Promise<string | undefined> {
+  const wt = task.worktree!;
+  await importFollowUps(project, wt).catch(() => {});
+  try {
+    if (!(await commitWorktree(wt, message))) return undefined;
+  } catch (err) {
+    throw new ReviewError(409, `Couldn't commit the task's changes on ${wt.branch}: ${(err as Error).message}`);
+  }
+  return (await head(wt.root))?.slice(0, 12);
+}
+
+/** Commit only: the work stays on the task's branch and in its worktree, ready to merge, push or change further. */
+export function commitBranch(project: Project, taskId: string, message: string) {
+  return withLock(`merge:${project.id}`, async () => {
+    const { task, wt } = await branchTask(project, taskId);
+    return { commit: await commitOnBranch(project, task, message), branch: wt.branch };
+  });
+}
+
+async function push(project: Project, task: Task, message: string) {
+  const wt = task.worktree!;
+  const { remote, github } = await remoteInfo(project.path);
+  if (!remote) throw new ReviewError(409, "This repository has no remote to push to. Add one with git remote add origin <url>.");
+  const commit = await commitOnBranch(project, task, message);
+  const r = await git(wt.root, ["push", "-u", remote, wt.branch], { timeout: 180_000 });
+  if (!r.ok) throw new ReviewError(409, `git push failed: ${(r.stderr || r.stdout).trim() || "unknown error"}`);
+  return { commit, branch: wt.branch, remote, github };
+}
+
+/** Commits, then pushes the task's branch to the remote (setting its upstream). The worktree stays. */
+export function pushBranch(project: Project, taskId: string, message: string) {
+  return withLock(`merge:${project.id}`, async () => {
+    const { task } = await branchTask(project, taskId);
+    const { commit, branch, remote } = await push(project, task, message);
+    return { commit, branch, remote };
+  });
+}
+
+function prBody(task: Task, base: string): string {
+  const r = task.reviewer;
+  return [
+    ...(task.notes?.trim() ? [task.notes.trim(), ""] : []),
+    ...(task.plan?.trim() && task.planApproved ? ["## Plan", "", task.plan.trim(), ""] : []),
+    ...(r?.status === "done" && r.summary
+      ? [
+          "## Review agent",
+          "",
+          r.summary,
+          ...(r.findings ?? []).map((f) => `- **${f.severity}**${f.file ? ` \`${f.file}\`` : ""}: ${f.text}`),
+          "",
+        ]
+      : []),
+    `Opened from the Mission Control task board (branch \`${task.worktree?.branch}\` into \`${base}\`).`,
+  ].join("\n");
+}
+
+/**
+ * Commits, pushes, and opens a pull request for the task's branch into the branch your checkout is on, with the
+ * GitHub CLI. The branch stays (locally and on the remote) for the PR; the worktree folder goes, and the task keeps a
+ * link to the PR. If a PR for the branch already exists, links that one.
+ */
+export function openPullRequest(project: Project, taskId: string, message: string, title?: string) {
+  return withLock(`merge:${project.id}`, async () => {
+    const { task, wt } = await branchTask(project, taskId);
+    const main = await repoFor(project.path);
+    if (!main) throw new ReviewError(400, "The project isn't a git repository");
+    const base = await currentBranch(main.root);
+    if (!base) throw new ReviewError(409, "Your checkout isn't on a branch (detached HEAD), so there's no base for the pull request");
+    if (base === wt.branch) throw new ReviewError(409, `Your checkout is on ${base} itself; switch back to your main branch first`);
+    const { github } = await push(project, task, message);
+    if (!github) throw new ReviewError(409, "Pushed the branch, but the remote isn't on GitHub, so the dashboard can't open a pull request there.");
+
+    const created = await gh(main.root, [
+      "pr", "create", "--head", wt.branch, "--base", base, "--title", (title || task.title).slice(0, 250), "--body-file", "-",
+    ], { input: prBody(task, base) });
+    // gh prints the new PR's URL, or names the existing one when the branch already has a PR.
+    const url = /https:\/\/\S+\/pull\/\d+/.exec(`${created.stdout}\n${created.stderr}`)?.[0];
+    if (!url) {
+      if (/ENOENT|is not recognized/i.test(created.stderr))
+        throw new ReviewError(409, "Pushed the branch, but the GitHub CLI (gh) isn't installed or isn't on PATH, so no pull request was opened.");
+      throw new ReviewError(409, `Pushed the branch, but gh pr create failed: ${created.stderr.trim() || "unknown error"}`);
+    }
+    const pr: TaskPullRequest = { url, number: Number(/\/pull\/(\d+)/.exec(url)?.[1]) || undefined, branch: wt.branch, base, openedAt: new Date().toISOString() };
+    // The PR carries the work from here; keep the branch, drop the checkout.
+    await removeWorktree(project, wt).catch((err) => console.error("Removing worktree:", err));
+    await updateTask(project.path, task.id, { worktree: undefined, review: undefined, pr });
+    return pr;
   });
 }
 

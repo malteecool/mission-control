@@ -84,6 +84,13 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   the conflicts** sends the task back to merge your branch into its own. **Discard branch** deletes both. Deleting the
   task commits its work to the branch as WIP and removes the folder, but keeps the branch. Tasks that already have
   a session or changes waiting for review when you turn this on keep working in the project folder.
+- **Feature branches (per-project setting, on by default):** even without parallel tasks, a task of kind *feature*
+  works in its own worktree on a `feature/<title>-<id>` branch, so your checkout never switches branches. Bugs,
+  chores and ideas still work in the project folder. Reviewing a branch offers **Merge**, plus **Commit** (onto the
+  branch, worktree kept), **Push** (to `origin`, or the only remote) and **Open PR**. Open PR commits, pushes and
+  runs `gh pr create` into the branch your checkout is on. The PR body is the task's notes, its approved plan and the
+  review agent's findings. It then removes the worktree (the branch stays), opens the PR in your browser, and leaves
+  a PR chip on the card. Open PR needs a GitHub remote and the GitHub CLI signed in (`gh auth login`).
 - **Recurring tasks** (the board's **Recurring** button): e.g. "Update dependencies and run the tests", every Monday
   at 09:00. Rules are every few hours, daily, weekdays, weekly on chosen days, or monthly on a day (the month's last
   day when it's shorter), in the server's local time. Each time one comes round, a fresh task lands on the board

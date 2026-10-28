@@ -32,10 +32,13 @@ import { recoverReviewers, reviewIfEnabled, startReviewer } from "./lib/reviewer
 import {
   ReviewError,
   changeSummaries,
+  commitBranch,
   commitChanges,
   discardTask,
   dismissReview,
   mergeTask,
+  openPullRequest,
+  pushBranch,
   revertChanges,
   taskChanges,
 } from "./lib/review.ts";
@@ -162,6 +165,7 @@ app.patch("/api/projects/:id", async (c) => {
     autoPermissionMode: body.autoPermissionMode,
     parallelTasks: typeof body.parallelTasks === "boolean" ? body.parallelTasks : undefined,
     autoReview: typeof body.autoReview === "boolean" ? body.autoReview : undefined,
+    featureBranches: typeof body.featureBranches === "boolean" ? body.featureBranches : undefined,
     touch: body.touch === true,
   });
   return c.json(await summarise(updated!));
@@ -441,7 +445,39 @@ app.post("/api/projects/:id/tasks/:taskId/changes/commit", async (c) => {
   const taskId = c.req.param("taskId");
   const { p, body, paths } = await reviewRequest(c.req.param("id"), taskId, await c.req.json().catch(() => null));
   if (typeof body.message !== "string" || !body.message.trim()) throw new HttpError(400, "A commit message is required");
-  return c.json(await commitChanges(p, taskId, body.message.trim().slice(0, 5000), paths));
+  const message = body.message.trim().slice(0, 5000);
+  // A task on its own branch commits there, keeping its worktree; others commit into your checkout.
+  if ((await getTask(p.path, taskId))?.worktree) return c.json({ ...(await commitBranch(p, taskId, message)), files: 0 });
+  return c.json(await commitChanges(p, taskId, message, paths));
+});
+
+// Commit what the task's branch has uncommitted, then push it (worktree tasks).
+app.post("/api/projects/:id/tasks/:taskId/changes/push", async (c) => {
+  const taskId = c.req.param("taskId");
+  const { p, body } = await reviewRequest(c.req.param("id"), taskId, await c.req.json().catch(() => null));
+  if (typeof body.message !== "string" || !body.message.trim()) throw new HttpError(400, "A commit message is required");
+  return c.json(await pushBranch(p, taskId, body.message.trim().slice(0, 5000)));
+});
+
+// Commit, push, and open a pull request for the task's branch with the gh CLI; `title` defaults to the task's.
+app.post("/api/projects/:id/tasks/:taskId/changes/pr", async (c) => {
+  const taskId = c.req.param("taskId");
+  const raw = (await c.req.json().catch(() => null)) as { title?: unknown } | null;
+  const { p, body } = await reviewRequest(c.req.param("id"), taskId, raw);
+  if (typeof body.message !== "string" || !body.message.trim()) throw new HttpError(400, "A commit message is required");
+  const title = typeof raw?.title === "string" && raw.title.trim() ? raw.title.trim() : undefined;
+  return c.json(await openPullRequest(p, taskId, body.message.trim().slice(0, 5000), title), 201);
+});
+
+// Opens the task's pull request in your browser.
+app.post("/api/projects/:id/tasks/:taskId/pr/open", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  const url = (await getTask(p.path, c.req.param("taskId")))?.pr?.url;
+  if (!url || !/^https:\/\//.test(url)) throw new HttpError(404, "This task has no pull request");
+  const [command, args]: [string, string[]] =
+    process.platform === "win32" ? ["explorer.exe", [url]] : [process.platform === "darwin" ? "open" : "xdg-open", [url]];
+  spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true }).on("error", () => {}).unref();
+  return c.body(null, 204);
 });
 
 app.post("/api/projects/:id/tasks/:taskId/changes/revert", async (c) => {

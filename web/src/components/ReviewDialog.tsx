@@ -1,9 +1,10 @@
 // Review what a task's Claude sessions changed: the files, their diffs, and Commit / Revert / Ask for changes.
-// A task that ran in its own worktree is reviewed as a branch instead: Merge it, Discard it, or Ask for changes.
+// A task that ran in its own worktree is reviewed as a branch instead: Merge it, Commit / Push it, open a pull request,
+// Discard it, or Ask for changes.
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertTriangle, Check, GitBranch, GitCommitHorizontal, GitMerge, MessageSquareReply, Trash2, Undo2, X } from "lucide-react";
+import { AlertTriangle, ArrowUpFromLine, Check, GitBranch, GitCommitHorizontal, GitMerge, GitPullRequest, MessageSquareReply, Trash2, Undo2, X } from "lucide-react";
 import { api, type ChangedFile, type Task } from "../lib/api.ts";
 import { timeAgo } from "../lib/util.ts";
 import { Button, ErrorNote, IconButton, Modal, ModalHeader } from "./ui.tsx";
@@ -82,6 +83,30 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
   const dismiss = useMutation({ mutationFn: () => api.dismissChanges(projectId, task.id), onSuccess: () => settle(0, null) });
   const merge = useMutation({ mutationFn: () => api.mergeTask(projectId, task.id, message.trim()), onSuccess: () => settle(0, null) });
   const discard = useMutation({ mutationFn: () => api.discardTask(projectId, task.id), onSuccess: () => settle(0, null) });
+  // On the task's branch: the worktree stays, so the dialog does too.
+  const commitBranch = useMutation({
+    mutationFn: () => api.commitChanges(projectId, task.id, message.trim()),
+    onSuccess: (r) => {
+      refresh();
+      setNote(r.commit ? `Committed ${r.commit.slice(0, 7)} on ${branch}.` : `Nothing new to commit on ${branch}.`);
+    },
+  });
+  const push = useMutation({
+    mutationFn: () => api.pushBranch(projectId, task.id, message.trim()),
+    onSuccess: (r) => {
+      refresh();
+      setNote(`${r.commit ? `Committed ${r.commit.slice(0, 7)} and pushed` : "Pushed"} ${r.branch} to ${r.remote}.`);
+    },
+  });
+  const pr = useMutation({
+    mutationFn: () => api.openPullRequest(projectId, task.id, message.trim()),
+    onSuccess: () => {
+      void api.openPr(projectId, task.id).catch(() => {});
+      settle(0, null);
+    },
+  });
+  const remote = changes.data?.remote;
+  const github = !!changes.data?.github;
   const ask = useMutation({
     mutationFn: () => api.askForChanges(projectId, task.id, feedback.trim()),
     onSuccess: () => {
@@ -90,8 +115,12 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
       onClose();
     },
   });
-  const busy = commit.isPending || revert.isPending || dismiss.isPending || ask.isPending || merge.isPending || discard.isPending;
-  const error = changes.error ?? commit.error ?? revert.error ?? dismiss.error ?? ask.error ?? merge.error ?? discard.error;
+  const busy =
+    commit.isPending || revert.isPending || dismiss.isPending || ask.isPending || merge.isPending || discard.isPending ||
+    commitBranch.isPending || push.isPending || pr.isPending;
+  const error =
+    changes.error ?? commit.error ?? revert.error ?? dismiss.error ?? ask.error ?? merge.error ?? discard.error ??
+    commitBranch.error ?? push.error ?? pr.error;
   // The branch and the checkout changed the same lines: Claude can merge your branch into its own and sort it out.
   const conflicted = !!merge.error?.message.includes(" conflicts in ");
 
@@ -235,13 +264,43 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
               className="accent-ring h-9 min-w-[220px] flex-1 rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white placeholder:text-slate-600"
             />
             <Button
-              variant="primary"
+              variant={github ? undefined : "primary"}
               disabled={!files.length || !message.trim() || busy}
               onClick={() => merge.mutate()}
               title="Commits what Claude left uncommitted on the task's branch, merges it into your current branch, then removes the worktree"
             >
               <GitMerge size={14} /> Merge{into ? ` into ${into}` : ""}
             </Button>
+            <div className="flex overflow-hidden rounded-lg border border-white/10">
+              <SegButton
+                disabled={!files.length || !message.trim() || busy}
+                onClick={() => commitBranch.mutate()}
+                title={`Commits what Claude left uncommitted onto ${branch}; the branch and worktree stay`}
+              >
+                <GitCommitHorizontal size={14} /> {commitBranch.isPending ? "Committing…" : "Commit"}
+              </SegButton>
+              <SegButton
+                disabled={!remote || !message.trim() || busy}
+                onClick={() => push.mutate()}
+                title={remote ? `Commits anything left, then pushes ${branch} to ${remote}` : "This repository has no remote to push to"}
+              >
+                <ArrowUpFromLine size={14} /> {push.isPending ? "Pushing…" : "Push"}
+              </SegButton>
+              <SegButton
+                strong={github}
+                disabled={!github || !files.length || !message.trim() || busy}
+                onClick={() => pr.mutate()}
+                title={
+                  github
+                    ? `Commits, pushes ${branch}, and opens a pull request into ${into ?? "your branch"} with the GitHub CLI; the worktree is removed, the branch stays`
+                    : remote
+                      ? "The remote isn't on GitHub"
+                      : "This repository has no remote"
+                }
+              >
+                <GitPullRequest size={14} /> {pr.isPending ? "Opening PR…" : "Open PR"}
+              </SegButton>
+            </div>
             <Button
               variant="danger"
               disabled={busy}
@@ -294,6 +353,37 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
         )}
       </div>
     </>
+  );
+}
+
+function SegButton({
+  strong,
+  disabled,
+  onClick,
+  title,
+  children,
+}: {
+  strong?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      className={clsx(
+        "inline-flex h-9 items-center gap-1.5 border-l border-white/10 px-3 text-sm transition first:border-l-0 disabled:cursor-default disabled:opacity-40",
+        strong
+          ? "bg-[var(--accent)] font-medium text-slate-950 hover:brightness-110"
+          : "bg-white/[0.04] text-slate-200 hover:bg-white/[0.09] disabled:hover:bg-white/[0.04]",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

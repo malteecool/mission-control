@@ -47,6 +47,7 @@ if (!columns.has("auto_permission_mode"))
   db.exec("ALTER TABLE projects ADD COLUMN auto_permission_mode TEXT NOT NULL DEFAULT 'acceptEdits'");
 if (!columns.has("parallel_tasks")) db.exec("ALTER TABLE projects ADD COLUMN parallel_tasks INTEGER NOT NULL DEFAULT 0");
 if (!columns.has("auto_review")) db.exec("ALTER TABLE projects ADD COLUMN auto_review INTEGER NOT NULL DEFAULT 0");
+if (!columns.has("feature_branches")) db.exec("ALTER TABLE projects ADD COLUMN feature_branches INTEGER NOT NULL DEFAULT 1");
 
 interface ProjectRow {
   id: number;
@@ -61,6 +62,7 @@ interface ProjectRow {
   auto_permission_mode: PermissionMode;
   parallel_tasks: number;
   auto_review: number;
+  feature_branches: number;
 }
 
 function toProject(row: ProjectRow): Project {
@@ -77,6 +79,7 @@ function toProject(row: ProjectRow): Project {
     autoPermissionMode: row.auto_permission_mode,
     parallelTasks: row.parallel_tasks === 1,
     autoReview: row.auto_review === 1,
+    featureBranches: row.feature_branches === 1,
   };
 }
 
@@ -129,7 +132,7 @@ export function createProject(input: {
 
 export function updateProject(
   id: number,
-  patch: Partial<Pick<Project, "name" | "color" | "description" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks" | "autoReview">> & {
+  patch: Partial<Pick<Project, "name" | "color" | "description" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks" | "autoReview" | "featureBranches">> & {
     touch?: boolean;
   },
 ): Project | undefined {
@@ -139,7 +142,7 @@ export function updateProject(
   const provided = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
   const next = { ...current, ...provided };
   db.prepare(
-    "UPDATE projects SET name = ?, color = ?, description = ?, pinned = ?, auto_run = ?, auto_permission_mode = ?, parallel_tasks = ?, auto_review = ?, last_opened_at = ? WHERE id = ?",
+    "UPDATE projects SET name = ?, color = ?, description = ?, pinned = ?, auto_run = ?, auto_permission_mode = ?, parallel_tasks = ?, auto_review = ?, feature_branches = ?, last_opened_at = ? WHERE id = ?",
   ).run(
     next.name,
     next.color,
@@ -149,6 +152,7 @@ export function updateProject(
     next.autoPermissionMode,
     next.parallelTasks ? 1 : 0,
     next.autoReview ? 1 : 0,
+    next.featureBranches ? 1 : 0,
     patch.touch ? new Date().toISOString() : (current.lastOpenedAt ?? null),
     id,
   );

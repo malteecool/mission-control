@@ -39,6 +39,17 @@ export interface Task {
   reviewer?: ReviewerReport;
   /** The finished task whose review suggested this one. */
   origin?: { taskId: string; title: string };
+  /** The pull request opened for the task's branch from the review. */
+  pr?: TaskPullRequest;
+}
+
+export interface TaskPullRequest {
+  url: string;
+  number?: number;
+  branch: string;
+  /** The branch it asks to merge into. */
+  base: string;
+  openedAt: string;
 }
 
 /** What the review agent made of a finished task: a quick code review, plus follow-up tasks it put in To do. */
@@ -113,6 +124,10 @@ export interface TaskChanges {
   /** For a task in its own worktree: its branch, and the branch your main checkout is on (what Merge merges into). */
   branch?: string;
   into?: string;
+  /** The remote Push and Open PR use (origin if there is one); missing when the repository has no remote. */
+  remote?: string;
+  /** The remote is on GitHub, so Open PR can work (through the gh CLI). */
+  github?: boolean;
 }
 
 /** One entry per task with changes to review, from GET /api/projects/:id/changes. */
@@ -228,6 +243,8 @@ export interface Project {
   parallelTasks: boolean;
   /** When a task reaches Done, run the review agent on it: a quick code review that can add follow-up tasks. */
   autoReview: boolean;
+  /** Feature tasks get their own worktree and feature/… branch even when tasks don't run in parallel. */
+  featureBranches: boolean;
 }
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";

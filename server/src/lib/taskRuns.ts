@@ -3,14 +3,15 @@
 // Plan-first tasks start in plan mode: the plan goes onto the card, and approving it continues the same
 // session in the project's task mode to build it.
 // In a project that runs tasks in parallel, each task works in its own git worktree and branch (worktrees.ts) and
-// starts right away; otherwise task runs share the project folder and queue one at a time.
+// starts right away, and so does a feature task in a project with featureBranches; other task runs share the project
+// folder and queue one at a time.
 import type { ChatEvent, Project, RunInfo, Task } from "../types.ts";
 import { beginReview, endReview } from "./review.ts";
 import { activeRunForTask, createRun, stopRun } from "./runs.ts";
 import { reviewIfEnabled } from "./reviewer.ts";
 import { getSettings } from "./settings.ts";
 import { getTask, readTasks, updateTask, type TaskInput } from "./tasks.ts";
-import { createWorktree, importFollowUps } from "./worktrees.ts";
+import { createWorktree, importFollowUps, wantsOwnBranch } from "./worktrees.ts";
 
 const MARKER_DONE = /^\s*TASK_STATUS:\s*done\b/im;
 const MARKER_BLOCKED = /^\s*TASK_STATUS:\s*blocked\b[\s:\-–—]*(.*)$/im;
@@ -128,7 +129,7 @@ export async function startTaskRun(
   const resume = (opts.resume || opts.feedback || planReply) && task.sessionId;
   // Not when continuing a session (it lives in the folder it started in) or when there are changes in the project
   // folder waiting for review: those stay where they are.
-  if (project.parallelTasks && !task.worktree && !resume && !task.review) {
+  if (wantsOwnBranch(project, task) && !task.worktree && !resume && !task.review) {
     const worktree = await createWorktree(project, task).catch((err) => void log(err));
     if (worktree) task = (await updateTask(project.path, task.id, { worktree })) ?? { ...task, worktree };
     const raced = activeRunForTask(task.id);

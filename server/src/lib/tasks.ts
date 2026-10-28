@@ -58,7 +58,7 @@ async function writeTasks(projectPath: string, tasks: Task[]): Promise<void> {
 export type TaskInput = Partial<
   Pick<
     Task,
-    "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review" | "planFirst" | "plan" | "planApproved" | "worktree" | "scheduleId" | "reviewer" | "origin"
+    "title" | "notes" | "status" | "kind" | "priority" | "sessionId" | "agentStatus" | "agentNote" | "review" | "planFirst" | "plan" | "planApproved" | "worktree" | "scheduleId" | "reviewer" | "origin" | "pr"
   >
 >;
 

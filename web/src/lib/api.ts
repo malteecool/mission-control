@@ -18,6 +18,7 @@ import type {
   DevServerStatus,
   Task,
   TaskChanges,
+  TaskPullRequest,
   UsageReport,
 } from "../../../server/src/types.ts";
 
@@ -46,7 +47,7 @@ export const api = {
     request<ProjectSummary>("POST", "/api/projects", body),
   updateProject: (
     id: number,
-    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks" | "autoReview">> & {
+    body: Partial<Pick<ProjectSummary, "name" | "description" | "color" | "pinned" | "autoRun" | "autoPermissionMode" | "parallelTasks" | "autoReview" | "featureBranches">> & {
       touch?: boolean;
     },
   ) =>
@@ -75,6 +76,11 @@ export const api = {
     request<{ reverted: string[]; skipped: string[] }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/revert`, { paths }),
   mergeTask: (id: number, taskId: string, message: string) =>
     request<{ commit?: string; branch: string; into: string }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/merge`, { message }),
+  pushBranch: (id: number, taskId: string, message: string) =>
+    request<{ commit?: string; branch: string; remote: string }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/push`, { message }),
+  openPullRequest: (id: number, taskId: string, message: string, title?: string) =>
+    request<TaskPullRequest>("POST", `/api/projects/${id}/tasks/${taskId}/changes/pr`, { message, title }),
+  openPr: (id: number, taskId: string) => request<void>("POST", `/api/projects/${id}/tasks/${taskId}/pr/open`),
   discardTask: (id: number, taskId: string) => request<void>("POST", `/api/projects/${id}/tasks/${taskId}/changes/discard`),
   dismissChanges: (id: number, taskId: string) => request<void>("DELETE", `/api/projects/${id}/tasks/${taskId}/changes`),
   askForChanges: (id: number, taskId: string, feedback: string) =>

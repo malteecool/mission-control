@@ -255,9 +255,11 @@ function parseEtime(etime: string): number {
   return ((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60 + Number(minutes)) * 60 + Number(seconds);
 }
 
-/** Every running process with its process group and start time (Unix). */
-function processGroups(): GroupEntry[] {
-  const r = spawnSync("ps", ["-A", "-o", "pid=,pgid=,etime="], { encoding: "utf8", timeout: 20_000 });
+/** Every running process with its process group and start time (Unix), or undefined if ps failed. */
+function processGroups(): GroupEntry[] | undefined {
+  // One -o per column: in "pid=,pgid=,etime=" everything after the first "=" is pid's header text.
+  const r = spawnSync("ps", ["-A", "-o", "pid=", "-o", "pgid=", "-o", "etime="], { encoding: "utf8", timeout: 20_000 });
+  if (r.error || r.status !== 0) return undefined;
   const now = Date.now();
   const table: GroupEntry[] = [];
   for (const line of (r.stdout ?? "").split("\n")) {
@@ -341,6 +343,7 @@ function stopLeftovers() {
   const windows = process.platform === "win32";
   const table = windows ? processTable() : [];
   const groups = windows ? [] : processGroups();
+  if (!groups) return; // Keep the records so the next start can try again.
   for (const r of records) {
     const startedAt = Date.parse(r.startedAt);
     if (windows) {

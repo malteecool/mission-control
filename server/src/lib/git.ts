@@ -51,9 +51,23 @@ export function git(
   args: string[],
   opts: { index?: string; input?: string; timeout?: number } = {},
 ): Promise<GitResult> {
+  return run("git", cwd, args, opts);
+}
+
+/** The GitHub CLI, for opening pull requests; uses whatever account `gh auth login` set up. */
+export function gh(cwd: string, args: string[], opts: { input?: string; timeout?: number } = {}): Promise<GitResult> {
+  return run("gh", cwd, args, { timeout: 120_000, ...opts });
+}
+
+function run(
+  command: string,
+  cwd: string,
+  args: string[],
+  opts: { index?: string; input?: string; timeout?: number },
+): Promise<GitResult> {
   return new Promise((resolve) => {
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(opts.index ? { GIT_INDEX_FILE: opts.index } : {}) };
-    const child = spawn("git", args, { cwd, env, windowsHide: true });
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1", ...(opts.index ? { GIT_INDEX_FILE: opts.index } : {}) };
+    const child = spawn(command, args, { cwd, env, windowsHide: true });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     const timer = setTimeout(() => child.kill(), opts.timeout ?? 60_000);
