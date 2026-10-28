@@ -7,6 +7,7 @@ import {
   Code2,
   Copy,
   FolderOpen,
+  FolderTree,
   FolderX,
   History,
   LayoutGrid,
@@ -57,6 +58,7 @@ export function Sidebar({
         open("tasks", "Tasks", <ListTodo size={14} />),
         open("chat", "Chat", <MessageSquare size={14} />),
         open("history", "History", <History size={14} />),
+        open("files", "Files", <FolderTree size={14} />),
         open("usage", "Usage", <BarChart3 size={14} />),
         "separator",
         {

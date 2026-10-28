@@ -16,6 +16,8 @@ import type {
   DesktopStatus,
   DevServerInfo,
   DevServerStatus,
+  DirListing,
+  FileContent,
   Task,
   TaskChanges,
   TaskPullRequest,
@@ -95,6 +97,11 @@ export const api = {
   searchSessions: (id: number, q: string) =>
     request<SessionSearchHit[]>("GET", `/api/projects/${id}/sessions/search?q=${encodeURIComponent(q)}`),
   session: (id: number, sid: string) => request<SessionTranscript>("GET", `/api/projects/${id}/sessions/${sid}`),
+
+  files: (id: number, path: string) => request<DirListing>("GET", `/api/projects/${id}/files?path=${encodeURIComponent(path)}`),
+  fileContent: (id: number, path: string) =>
+    request<FileContent>("GET", `/api/projects/${id}/files/content?path=${encodeURIComponent(path)}`),
+  fileRawUrl: (id: number, path: string) => `/api/projects/${id}/files/raw?path=${encodeURIComponent(path)}`,
 
   devServer: (id: number) => request<DevServerInfo>("GET", `/api/projects/${id}/dev`),
   devServers: () => request<DevServerStatus[]>("GET", "/api/dev"),

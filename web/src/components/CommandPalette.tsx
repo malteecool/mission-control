@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import clsx from "clsx";
-import { CheckSquare, CircleDollarSign, FolderPlus, History, LayoutGrid, MessageSquare, Plus, Search, Settings2 } from "lucide-react";
+import { CheckSquare, CircleDollarSign, FolderPlus, FolderTree, History, LayoutGrid, MessageSquare, Plus, Search, Settings2 } from "lucide-react";
 import type { ProjectSummary } from "../lib/api.ts";
 import { navigate, type Route } from "../lib/router.ts";
 import { chat } from "../lib/chatStore.ts";
@@ -58,6 +58,7 @@ export function CommandPalette({
           },
         },
         { id: "tab-history", group: "This project", label: "Chat history", icon: <History size={14} />, run: () => navigate({ name: "project", id, tab: "history" }) },
+        { id: "tab-files", group: "This project", label: "Browse files", icon: <FolderTree size={14} />, run: () => navigate({ name: "project", id, tab: "files" }) },
         { id: "tab-usage", group: "This project", label: "Cost and usage", icon: <CircleDollarSign size={14} />, run: () => navigate({ name: "project", id, tab: "usage" }) },
       );
     }

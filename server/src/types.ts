@@ -484,3 +484,37 @@ export interface UsageReport {
   /** Task runs plus chat turns in a task's session; most expensive first. */
   tasks: Array<UsageTotals & { projectId: number; taskId: string; title: string; status?: TaskStatus; lastRunAt: string }>;
 }
+
+/** One entry of a project folder, from GET /api/projects/:id/files. */
+export interface FileEntry {
+  name: string;
+  /** Relative to the project folder, with forward slashes. */
+  path: string;
+  type: "dir" | "file";
+  /** Bytes; 0 for folders. */
+  size: number;
+  modifiedAt: string;
+}
+
+export interface DirListing {
+  /** "" for the project folder itself. */
+  path: string;
+  /** Folders first, then files, each by name. */
+  entries: FileEntry[];
+  /** Set when the folder had more entries than are listed. */
+  truncated?: boolean;
+}
+
+/** A file's contents, from GET /api/projects/:id/files/content. */
+export interface FileContent {
+  path: string;
+  size: number;
+  modifiedAt: string;
+  /** Looks binary, so there's no `text`. */
+  binary: boolean;
+  /** A picture the browser can show from GET /api/projects/:id/files/raw. */
+  image: boolean;
+  text?: string;
+  /** Only the start of the file is in `text`. */
+  truncated?: boolean;
+}

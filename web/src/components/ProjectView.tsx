@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { CheckSquare, CircleDollarSign, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, TerminalSquare, Trash2 } from "lucide-react";
+import { CheckSquare, CircleDollarSign, FolderTree, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, TerminalSquare, Trash2 } from "lucide-react";
 import { api, type PermissionMode } from "../lib/api.ts";
 import { href, navigate, type Route, type Tab } from "../lib/router.ts";
 import { activeRuns, useRuns } from "../lib/runs.ts";
@@ -13,6 +13,7 @@ import { ChatPanel } from "./ChatPanel.tsx";
 import { HistoryPanel } from "./HistoryPanel.tsx";
 import { UsagePanel } from "./UsagePanel.tsx";
 import { DevPanel } from "./DevPanel.tsx";
+import { FilesPanel } from "./FilesPanel.tsx";
 
 const COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#fb7185", "#2dd4bf"];
 
@@ -57,6 +58,7 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
           : undefined,
     },
     { id: "history", label: "History", icon: <History size={14} /> },
+    { id: "files", label: "Files", icon: <FolderTree size={14} /> },
     {
       id: "dev",
       label: "Dev",
@@ -148,6 +150,7 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
       <div className="min-h-0 flex-1">
         {p.exists && route.tab === "tasks" && <TaskBoard projectId={p.id} />}
         {p.exists && route.tab === "chat" && <ChatPanel projectId={p.id} />}
+        {p.exists && route.tab === "files" && <FilesPanel projectId={p.id} filePath={route.filePath} />}
         {p.exists && route.tab === "dev" && <DevPanel projectId={p.id} />}
         {route.tab === "history" && <HistoryPanel projectId={p.id} sessionId={route.sessionId} />}
         {route.tab === "usage" && (

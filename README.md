@@ -117,6 +117,9 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   notifications (per browser), and which `claude` executable to run.
 - **History** reads Claude Code's own session files (`~/.claude/projects/…`), so it includes chats from the terminal
   and desktop app too. Any session can be resumed from the dashboard.
+- **Files** is a read-only browser for the project folder: expand folders in the tree and open a file to read it
+  (Markdown renders, with a Source toggle; pictures preview; files over 512 KB show their start). Paths can't leave
+  the project folder, symlinks and junctions included. The open file is in the URL, so you can link to it.
 - **Cost and usage:** when a dashboard run finishes, its reported cost and turns are stored in `dashboard.db`. The
   overview totals them per day, per project and per task, each project has a **Usage** tab, and task cards show
   what they've cost so far. Chat replies in a task's session count towards that task. Runs that are stopped

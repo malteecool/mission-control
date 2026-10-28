@@ -56,6 +56,7 @@ import {
   validateScheduleInput,
 } from "./lib/schedules.ts";
 import { usageReport } from "./lib/usage.ts";
+import { FileError, listDir, readFileContent, readImage } from "./lib/files.ts";
 import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopAllDevServers, stopDevServer } from "./lib/devServers.ts";
 import type {
   ChatRequest,
@@ -110,7 +111,7 @@ class HttpError extends Error {
   }
 }
 app.onError((err, c) => {
-  if (err instanceof HttpError || err instanceof ReviewError) return c.json({ error: err.message }, err.status);
+  if (err instanceof HttpError || err instanceof ReviewError || err instanceof FileError) return c.json({ error: err.message }, err.status);
   if (err instanceof SyntaxError) return c.json({ error: "Invalid JSON body" }, 400);
   console.error(err);
   return c.json({ error: err.message }, 500);
