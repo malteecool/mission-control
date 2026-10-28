@@ -64,11 +64,14 @@ function ReviewBody({ projectId, task, onClose }: { projectId: number; task: Tas
 
   const commit = useMutation({
     mutationFn: (paths?: string[]) => api.commitChanges(projectId, task.id, message.trim(), paths),
-    onSuccess: (r, paths) =>
+    onSuccess: (r, paths) => {
+      const skipped = r.skipped ?? [];
+      const done = r.commit ? `Committed ${r.files} file${r.files === 1 ? "" : "s"} as ${r.commit.slice(0, 7)}.` : skipped.length ? "" : "Already committed.";
       settle(
-        paths ? files.length - paths.length : 0,
-        r.commit ? `Committed ${r.files} file${r.files === 1 ? "" : "s"} as ${r.commit.slice(0, 7)}.` : "Already committed.",
-      ),
+        (paths ? files.length - paths.length : 0) + skipped.length,
+        skipped.length ? `${done} Left ${skipped.join(", ")} alone: changed again since the task finished.`.trim() : done,
+      );
+    },
   });
   const revert = useMutation({
     mutationFn: (paths?: string[]) => api.revertChanges(projectId, task.id, paths),

@@ -71,7 +71,7 @@ export const api = {
   changeSummaries: (id: number) => request<ChangeSummary[]>("GET", `/api/projects/${id}/changes`),
   taskChanges: (id: number, taskId: string) => request<TaskChanges>("GET", `/api/projects/${id}/tasks/${taskId}/changes`),
   commitChanges: (id: number, taskId: string, message: string, paths?: string[]) =>
-    request<{ commit?: string; files: number }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/commit`, { message, paths }),
+    request<{ commit?: string; files: number; skipped?: string[] }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/commit`, { message, paths }),
   revertChanges: (id: number, taskId: string, paths?: string[]) =>
     request<{ reverted: string[]; skipped: string[] }>("POST", `/api/projects/${id}/tasks/${taskId}/changes/revert`, { paths }),
   mergeTask: (id: number, taskId: string, message: string) =>
