@@ -6,6 +6,7 @@
 mod api;
 mod approvals;
 mod hotkey;
+mod quit;
 mod titlebar;
 
 use std::fs::{self, File};
@@ -23,7 +24,7 @@ use tauri_plugin_global_shortcut::ShortcutState;
 
 const WINDOW: &str = "main";
 
-/// The API server this app started, if it had to start one; stopped when the app quits.
+/// The API server this app started, if it had to start one; stopped when the app quits (see quit.rs).
 struct Server(Mutex<Option<Child>>);
 
 fn api_port() -> u16 {
@@ -65,8 +66,9 @@ fn start_server(port: u16) -> std::io::Result<Child> {
     cmd.spawn()
 }
 
-/// Stops the server and the Claude processes it started. Windows has no SIGTERM, so the whole tree goes at once;
-/// interrupted task sessions can be resumed from their cards next time.
+/// Stops the server and the Claude processes it started. Windows has no SIGTERM, so the whole tree goes at once,
+/// dev servers included; interrupted task sessions can be resumed from their cards next time. Quit asks the server to
+/// shut down instead (quit.rs), so this is for when it won't, or the app exits some other way.
 fn stop_server(mut child: Child) {
     #[cfg(windows)]
     {
@@ -167,7 +169,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_window(app),
-            "quit" => app.exit(0),
+            "quit" => quit::quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

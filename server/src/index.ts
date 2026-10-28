@@ -56,7 +56,7 @@ import {
   validateScheduleInput,
 } from "./lib/schedules.ts";
 import { usageReport } from "./lib/usage.ts";
-import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopDevServer } from "./lib/devServers.ts";
+import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopAllDevServers, stopDevServer } from "./lib/devServers.ts";
 import type {
   ChatRequest,
   DesktopStatus,
@@ -217,6 +217,9 @@ app.post("/api/projects/:id/open", async (c) => {
 
 app.get("/api/dev", (c) => c.json(listDevServers()));
 
+// Stops every running dev server (they otherwise outlive the dashboard, see devServers.ts).
+app.post("/api/dev/stop-all", async (c) => c.json({ stopped: await stopAllDevServers() }));
+
 app.get("/api/projects/:id/dev", (c) => {
   const p = projectOr404(c.req.param("id"));
   return c.json(devServerInfo(p.id, p.path));
@@ -274,6 +277,15 @@ app.patch("/api/settings", async (c) => {
 
 // Runs `claude --version`, so it's a separate call the settings page makes when it opens.
 app.get("/api/settings/claude", (c) => c.json(claudeInfo()));
+
+// Quits the server for good, as opposed to a restart: `{ "stopDevServers": true }` stops the dev servers first, which a
+// restart leaves running. Claude processes are stopped on exit as always (claudeRunner.ts).
+app.post("/api/shutdown", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { stopDevServers?: unknown };
+  const devServersStopped = body.stopDevServers === true ? await stopAllDevServers() : 0;
+  setTimeout(() => process.exit(0), 100); // After the response has gone out.
+  return c.json({ devServersStopped });
+});
 
 // The desktop app (desktop/src-tauri/src/hotkey.rs) reports whether it could register the shortcut, every few seconds
 // while it runs, so the settings page can say so. Kept in memory: a restart just waits for the next report.

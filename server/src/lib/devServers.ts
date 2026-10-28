@@ -317,6 +317,17 @@ export async function stopDevServer(projectId: number): Promise<boolean> {
   return true;
 }
 
+/**
+ * Stops every running dev server, for quitting the dashboard for good (a restart leaves them running). Returns how
+ * many were asked to stop.
+ */
+export async function stopAllDevServers(): Promise<number> {
+  await leftoversAdopted;
+  const ids = [...servers.values()].filter((s) => s.child || s.adopted).map((s) => s.info.projectId);
+  const stopped = await Promise.all(ids.map(stopDevServer));
+  return stopped.filter(Boolean).length;
+}
+
 /** Reads the remaining output of a dev server that has exited and stops following its logs. */
 function finishTails(s: DevServer) {
   for (const t of s.tails ?? []) {
@@ -365,6 +376,7 @@ setInterval(() => {
 
 // Dev servers deliberately aren't stopped when the dashboard exits: a restart (scripts/dev.mjs, or after an update)
 // shouldn't take down the user's dev server. They're written down instead, and the next start reattaches to them.
+// Quitting for good (POST /api/shutdown, which the desktop app's Quit offers) can stop them with stopAllDevServers.
 const runningFile = path.join(dataDir, "dev-servers.json");
 
 interface RunningRecord {

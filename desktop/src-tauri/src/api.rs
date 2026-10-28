@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-fn request(port: u16, method: &str, path: &str, body: Option<&Value>) -> Option<(u16, String)> {
+fn request(port: u16, method: &str, path: &str, body: Option<&Value>, wait: Duration) -> Option<(u16, String)> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream.set_read_timeout(Some(wait)).ok()?;
     let body = body.map(Value::to_string).unwrap_or_default();
     // Writes need the `x-dashboard` header (the server's guard against other websites).
     write!(
@@ -30,7 +30,7 @@ fn request(port: u16, method: &str, path: &str, body: Option<&Value>) -> Option<
 
 /// `GET path`, parsed as JSON; None if the server is down or answers with an error.
 pub fn get(port: u16, path: &str) -> Option<Value> {
-    match request(port, "GET", path, None)? {
+    match request(port, "GET", path, None, Duration::from_secs(5))? {
         (200, body) => serde_json::from_str(&body).ok(),
         _ => None,
     }
@@ -38,5 +38,10 @@ pub fn get(port: u16, path: &str) -> Option<Value> {
 
 /// `PUT path` with a JSON body; whether the server accepted it.
 pub fn put(port: u16, path: &str, body: &Value) -> bool {
-    matches!(request(port, "PUT", path, Some(body)), Some((200..=299, _)))
+    matches!(request(port, "PUT", path, Some(body), Duration::from_secs(5)), Some((200..=299, _)))
+}
+
+/// `POST path` with a JSON body, waiting up to `wait` for the answer; whether the server accepted it.
+pub fn post(port: u16, path: &str, body: &Value, wait: Duration) -> bool {
+    matches!(request(port, "POST", path, Some(body), wait), Some((200..=299, _)))
 }
