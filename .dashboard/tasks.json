@@ -337,53 +337,804 @@
       "id": "8816acd0-9729-47bf-9c09-cb2ed414cb0d",
       "title": "Re-adopt dev servers across dashboard restarts",
       "notes": "Dev servers are now killed on restart because their output pipes die with the API. Write each dev server's stdout/stderr to a log file in data/ instead of pipes, then on startup reattach to the surviving PID (tail the log, watch the process) instead of killing it. That way a dashboard restart doesn't take down the user's dev server. Code: startDevServer and stopLeftovers in server/src/lib/devServers.ts.",
-      "status": "todo",
+      "status": "done",
       "kind": "feature",
       "priority": 3,
       "createdAt": "2026-10-28T18:15:27.849Z",
-      "updatedAt": "2026-10-28T18:15:27.849Z",
+      "updatedAt": "2026-10-28T18:51:57.910Z",
       "origin": {
         "taskId": "d8212040-66fd-4810-a8b5-73031288dcee",
         "title": "Dev servers survive dashboard restarts on Windows"
+      },
+      "sessionId": "67792415-05e0-4182-90ec-1a92049a35ef",
+      "doneAt": "2026-10-28T18:49:48.806Z",
+      "reviewer": {
+        "runId": "a99c7e0a-3c9c-4c83-bc6e-b43774458096",
+        "sessionId": "70e6f180-f253-4daf-8b2c-3a77c135ebcc",
+        "startedAt": "2026-10-28T18:49:49.321Z",
+        "finishedAt": "2026-10-28T18:51:06.020Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "Dev servers now write to log files and are reattached after a restart. This works well on Unix, but on Windows the saved root PID is the dead cmd.exe, so after enough restarts PID reuse can lose track of a still-running dev server, which then can't be stopped.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "On Windows the saved pid is the outer cmd.exe, which dies with the dashboard. Each re-adoption saves that same dead pid again. Once Windows gives the PID to another process, leftoverTree (line 455) sees a live root with the wrong start time and returns []. The still-running dev server is then marked 'Exited while the dashboard was down' and its record is dropped, so it keeps its port and can't be tracked or stopped. The risk grows with every restart.",
+            "file": "server/src/lib/devServers.ts:363"
+          },
+          {
+            "severity": "low",
+            "text": "The exit handler that killed dev servers was removed, so quitting the dashboard for good also leaves them running and holding ports until the next launch. Nothing tells a restart apart from a real quit.",
+            "file": "server/src/lib/devServers.ts:347"
+          },
+          {
+            "severity": "low",
+            "text": "The truncate condition uses the size from before the last read, so output written between that read and truncateSync is lost from the Dev tab.",
+            "file": "server/src/lib/devServers.ts:157"
+          },
+          {
+            "severity": "low",
+            "text": "readBacklog flushes the trailing partial line as a complete line, and the tail then resumes mid-line, so one line shows up split in two after reattaching.",
+            "file": "server/src/lib/devServers.ts:184"
+          },
+          {
+            "severity": "low",
+            "text": "Stopping an adopted server on Windows runs a synchronous PowerShell process scan (up to 20s timeout) inside the request handler, blocking the API while it runs.",
+            "file": "server/src/lib/devServers.ts:300"
+          }
+        ],
+        "followUps": [
+          "89d28037-984b-4527-94e4-7ab2a1766993",
+          "5a22338a-9f3f-4349-9ac3-5854480c269c"
+        ]
       }
     },
     {
       "id": "71aac0f2-e895-4406-aa91-1c7fc99b8ef5",
       "title": "Keep the leftover dev-server sweep from blocking server startup",
       "notes": "In server/src/lib/devServers.ts, stopLeftovers() runs at import time and makes two blocking spawnSync('powershell.exe') calls (bootTime at line ~246, processTable at line ~227). Get LastBootUpTime and the Win32_Process table from one PowerShell script, and run the sweep asynchronously (spawn instead of spawnSync, or defer with setImmediate) so the dashboard server can start listening right away. If the sweep becomes async, make sure startDevServer for a project waits for it, or skips that project's record, so a fresh start isn't killed.",
-      "status": "todo",
+      "status": "done",
       "kind": "chore",
       "priority": 3,
       "createdAt": "2026-10-28T18:19:33.724Z",
-      "updatedAt": "2026-10-28T18:19:33.724Z",
+      "updatedAt": "2026-10-28T19:00:54.491Z",
       "origin": {
         "taskId": "c0e5ccb0-ae6d-404c-a45d-27e2b1f35faf",
         "title": "Tighten PID-reuse check when stopping leftover dev servers"
+      },
+      "sessionId": "c940d3b0-5e51-41c9-9913-6b8983f1de00",
+      "doneAt": "2026-10-28T18:59:50.165Z",
+      "reviewer": {
+        "runId": "1dcfe96f-d2ef-4b51-a3fd-98a94c79d75d",
+        "sessionId": "6fbd200b-5739-4fdc-a7f5-edbb25caae87",
+        "startedAt": "2026-10-28T18:59:50.591Z",
+        "finishedAt": "2026-10-28T19:00:40.806Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "Moving the leftover sweep off the startup path is done well: starts and stops wait for it, and the one-PowerShell scan is tidy. But the new capture() helper rejects non-zero exit codes, and the Windows process query very likely exits 1 because of the Idle process, which would silently turn off reattaching on Windows.",
+        "findings": [
+          {
+            "severity": "high",
+            "text": "capture() only resolves output when the exit code is 0. In windowsProcesses() the Win32_Process query calls $_.CreationDate.ToUniversalTime() on every process, and System Idle Process (PID 0) normally has a null CreationDate. That error makes `powershell -Command` exit with 1, so windowsProcesses() returns undefined, adoptLeftovers() returns early every time and nothing is reattached. stopDevServer also loses its fresh PID check. The old spawnSync code ignored the exit code. Not verified by running it (read-only session).",
+            "file": "server/src/lib/devServers.ts:423"
+          },
+          {
+            "severity": "low",
+            "text": "stopDevServer now waits on PowerShell before reading s.info.pid/startedAt. If the reattached server exits during that wait and a new one is started, the stop works out the new server's tree from those fields and kills it. Read pid/startedAt/survivors before the await.",
+            "file": "server/src/lib/devServers.ts:309"
+          },
+          {
+            "severity": "low",
+            "text": "'Keep the records so the next start can try again' is only true until any dev server is started: startDevServer → saveRunning() overwrites dev-servers.json from the in-memory map, which doesn't have the records that weren't adopted.",
+            "file": "server/src/lib/devServers.ts:594"
+          }
+        ],
+        "followUps": [
+          "9003d5db-80de-4afa-9bf0-45cf03f69911"
+        ]
       }
     },
     {
       "id": "1df853c7-2bf3-424a-b691-016252d04dec",
       "title": "Fix the ps column flags in the Unix leftover sweep",
       "notes": "In server/src/lib/devServers.ts processGroups(), replace `-o pid=,pgid=,etime=` with separate `-o pid= -o pgid= -o etime=` flags. Under POSIX/BSD rules, text after `=` is header text, so the current form probably yields only a pid column and the sweep never matches anything. While there, if spawnSync reports r.error or a non-zero status, return early from stopLeftovers without calling saveRunning([]), so the records survive for the next start. Check it on macOS and Linux by starting a dev server, SIGKILLing the dashboard, and restarting it.",
-      "status": "doing",
+      "status": "done",
       "kind": "bug",
       "priority": 1,
       "createdAt": "2026-10-28T18:23:57.159Z",
-      "updatedAt": "2026-10-28T18:25:39.963Z",
+      "updatedAt": "2026-10-28T18:35:11.456Z",
       "origin": {
         "taskId": "fd63ffe3-3fcc-456e-807f-761c4c56c3c8",
         "title": "Make leftover dev-server cleanup work on Unix"
       },
-      "review": {
-        "base": "89dcb0672b9c77692f46c3d989b132af13e67535",
-        "head": "dfce539664e730d3b91e81b4568add01b98bc4a3",
-        "startedAt": "2026-10-28T18:25:10.693Z",
-        "end": "d6f56fbc90bc4b13c45c0e58b07c2aad34dcdd81",
-        "endHead": "dfce539664e730d3b91e81b4568add01b98bc4a3"
-      },
       "sessionId": "23b01c95-4f0d-40f2-82ce-1f364ec92283",
-      "agentStatus": "blocked",
-      "agentNote": "need someone to run the SIGKILL/restart check on macOS and Linux (no Mac here, and WSL has no Node)"
+      "doneAt": "2026-10-28T18:34:12.777Z",
+      "reviewer": {
+        "runId": "661a5c11-fd9e-449c-8702-1c51bcf6acb7",
+        "sessionId": "c919baa8-112b-4912-9ffb-1720470bc078",
+        "startedAt": "2026-10-28T18:34:13.227Z",
+        "finishedAt": "2026-10-28T18:35:11.444Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "The ps column fix and the early return when ps fails are correct, but that change had already gone in with ed2b9f7. This task's own commit (d8d67da) only overwrote server/src/lib/review.ts with an old copy from partway through the PR feature, with line breaks inside string literals, so the server on HEAD doesn't parse. The working tree still has the good file and needs committing.",
+        "findings": [
+          {
+            "severity": "high",
+            "text": "Commit d8d67da swapped review.ts on HEAD for an older copy saved partway through the PR feature: split(\"\\n\"), join(\"\\n\") and the gh output template have real line breaks inside \"...\" literals, which is a syntax error, and it also brings back the /not found/ check on gh output. HEAD doesn't parse; only the uncommitted working-tree copy is correct. Commit the working-tree review.ts to restore main.",
+            "file": "server/src/lib/review.ts:392"
+          },
+          {
+            "severity": "high",
+            "text": "commitChanges writes each chosen file exactly as the task left it on top of HEAD, without checking whether HEAD or the working tree changed that file after the task finished (revertChanges already skips such files). With tasks running side by side in one checkout, that is how this commit undid ed2b9f7's newer review.ts.",
+            "file": "server/src/lib/review.ts:276"
+          },
+          {
+            "severity": "low",
+            "text": "Returning early keeps running.json when ps fails, but starting any dev server later calls saveRunning() (line 131), which rewrites the file from the servers in memory, so the records only survive if no server starts first. Fine as a best effort; just weaker than the notes suggest.",
+            "file": "server/src/lib/devServers.ts:346"
+          }
+        ],
+        "followUps": [
+          "8f266784-810a-4bb2-baaa-8ab7a7ea470d"
+        ]
+      }
+    },
+    {
+      "id": "8f266784-810a-4bb2-baaa-8ab7a7ea470d",
+      "title": "Don't let Commit overwrite files that changed since the task finished",
+      "notes": "In server/src/lib/review.ts commitChanges (~line 276), before building the commit, compare each chosen file's blob in HEAD and in the working tree with both review.base and review.end. If HEAD already matches end, there's nothing to commit for that file. If HEAD or the working tree differs from both base and end, someone changed it after the task, so skip it (or refuse with a 409 naming the files) instead of writing the end blob over it, the same way revertChanges does at ~line 306. Also skip the index update at line 293 for skipped files. This is what let d8d67da undo ed2b9f7's review.ts.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 1,
+      "createdAt": "2026-10-28T18:35:11.446Z",
+      "updatedAt": "2026-10-28T18:45:09.406Z",
+      "origin": {
+        "taskId": "1df853c7-2bf3-424a-b691-016252d04dec",
+        "title": "Fix the ps column flags in the Unix leftover sweep"
+      },
+      "sessionId": "53ce1dbc-e760-4956-82dd-c6841cd1128d",
+      "doneAt": "2026-10-28T18:44:09.963Z",
+      "reviewer": {
+        "runId": "dad6e2fc-0993-485f-bdaa-c61efb1490b6",
+        "sessionId": "557d4f6f-c71a-43d1-afbe-f5771de2acf5",
+        "startedAt": "2026-10-28T18:44:10.262Z",
+        "finishedAt": "2026-10-28T18:44:53.173Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "The skip-on-later-change logic in commitChanges is sound and the UI reports skipped files, but the server half was never committed: 5a2e3d7 holds only the web files, and HEAD's review.ts is still d8d67da's copy, which has line breaks inside string literals and won't parse. Commit the working-tree review.ts with git. Commit also wrongly skips files the task's own sessions committed partway through.",
+        "findings": [
+          {
+            "severity": "high",
+            "text": "The commitChanges change isn't in any commit. 5a2e3d7 only touched web/src/components/ReviewDialog.tsx and web/src/lib/api.ts, so HEAD has a client expecting `skipped` and a server without it. HEAD's review.ts is also d8d67da's broken copy, with line breaks inside string literals in remoteInfo, prBody and openPullRequest, so it won't parse. The working-tree file is correct (ed2b9f7 plus this task's change). Commit it with git directly: the dashboard's own Commit will likely skip it, since HEAD's copy differs from both of the task's snapshots.",
+            "file": "server/src/lib/review.ts:277"
+          },
+          {
+            "severity": "medium",
+            "text": "`later()` treats only base, end and review.head as 'the task's own' states. It leaves out review.endHead, the commits the task's sessions made. If a session commits a file and then edits it again, HEAD holds that in-between version and Commit skips the file as 'changed again since the task finished'. Fix: load entries for review.endHead and add them to the `also` list when checking `last`.",
+            "file": "server/src/lib/review.ts:293"
+          },
+          {
+            "severity": "low",
+            "text": "Skipped files stay in the review, so pressing Commit again just skips them again. The only way to clear them is Revert or Dismiss, and the UI message doesn't say that.",
+            "file": "server/src/lib/review.ts:296"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "89d28037-984b-4527-94e4-7ab2a1766993",
+      "title": "Keep tracking re-adopted Windows dev servers across repeated restarts",
+      "notes": "In devServers.ts, saveRunning writes s.info.pid, which on Windows is the long-dead cmd.exe root. After its PID is reused, leftoverTree returns [] and the running dev server is orphaned. Persist the surviving PIDs (s.adopted, with their start times) in RunningRecord, and match on those in adoptLeftovers instead of relying only on the dead root's children.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-28T18:51:06.021Z",
+      "updatedAt": "2026-10-28T18:57:40.176Z",
+      "origin": {
+        "taskId": "8816acd0-9729-47bf-9c09-cb2ed414cb0d",
+        "title": "Re-adopt dev servers across dashboard restarts"
+      },
+      "sessionId": "437e6331-7233-4ea5-95ce-7e88cbea2f33",
+      "doneAt": "2026-10-28T18:53:25.094Z",
+      "reviewer": {
+        "runId": "d95a7348-dfea-4790-895c-6b0afaee4069",
+        "sessionId": "8da134cc-5fef-41b0-b83e-ba6b2923b2f7",
+        "startedAt": "2026-10-28T18:53:25.503Z",
+        "finishedAt": "2026-10-28T18:54:12.646Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "Saves the reattached Windows PIDs with their start times and follows them (and their newer children) on the next restart and on Stop, so a reused root PID no longer orphans the dev server. The start-time checks guard against reused PIDs and the change doesn't touch the Unix path.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "Only the PIDs found at reattach time (s.adopted) are saved and watched. A process the dev server starts after reattach is found on the next restart only while a saved ancestor still runs; if all the original adopted PIDs exit but a newer child lives on, checkAdopted marks the server stopped and the child is orphaned. The dashboard already only watched the original PIDs before this change, and common dev tools keep their parent alive, so it's rare.",
+            "file": "server/src/lib/devServers.ts:389"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "5a22338a-9f3f-4349-9ac3-5854480c269c",
+      "title": "Offer to stop dev servers when the dashboard is quit for good",
+      "notes": "Dev servers now outlive every dashboard exit (devServers.ts no longer has an exit handler), including a real quit of the desktop app, and keep their ports until the next launch. Give the quit path (desktop app quit / an explicit shutdown endpoint) a way to stop them while restarts via scripts/dev.mjs still keep them.",
+      "status": "done",
+      "kind": "idea",
+      "priority": 3,
+      "createdAt": "2026-10-28T18:51:06.031Z",
+      "updatedAt": "2026-10-28T19:13:03.369Z",
+      "origin": {
+        "taskId": "8816acd0-9729-47bf-9c09-cb2ed414cb0d",
+        "title": "Re-adopt dev servers across dashboard restarts"
+      },
+      "sessionId": "a170f2ee-8e5f-49d5-bffb-873f7228b51d",
+      "doneAt": "2026-10-28T19:10:36.375Z"
+    },
+    {
+      "id": "9003d5db-80de-4afa-9bf0-45cf03f69911",
+      "title": "Stop the Windows leftover sweep from failing on processes with no start time",
+      "notes": "In server/src/lib/devServers.ts, windowsProcesses() (~line 435) runs `$_.CreationDate.ToUniversalTime()` for every Win32_Process. System Idle Process has a null CreationDate, so PowerShell likely exits 1 and capture() (~line 423) throws all the output away, which makes adoptLeftovers() quit early on every start. Filter those processes out in the script (e.g. `Get-CimInstance Win32_Process | Where-Object CreationDate | ForEach-Object {...}`), and/or have capture() return stdout whenever the process ran, failing only on spawn error or timeout. While there, read s.info.pid/startedAt/survivors before the await in stopDevServer (~line 309) so a server started during the wait isn't targeted.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 1,
+      "createdAt": "2026-10-28T19:00:40.808Z",
+      "updatedAt": "2026-10-28T19:05:29.482Z",
+      "origin": {
+        "taskId": "71aac0f2-e895-4406-aa91-1c7fc99b8ef5",
+        "title": "Keep the leftover dev-server sweep from blocking server startup"
+      },
+      "sessionId": "b78ff397-563a-40de-bf5e-21a60d5ef40c",
+      "doneAt": "2026-10-28T19:01:37.423Z",
+      "reviewer": {
+        "runId": "50e46280-4ba9-46bf-b34d-a10097a4234a",
+        "sessionId": "33566aaf-c6b7-4804-a6ec-f8ab5c551fd8",
+        "startedAt": "2026-10-28T19:01:37.825Z",
+        "finishedAt": "2026-10-28T19:02:07.416Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "The null-CreationDate filter and the stopDevServer read-before-await fix are both correct. But since capture() now passes on a failed command's output, a PowerShell or ps that exits non-zero with no output is read as an empty process list, so recorded dev servers that are still running get marked exited and their records deleted.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "capture() now returns stdout on any non-zero exit, but windowsProcesses()/processGroups() never check that they parsed any processes. If PowerShell fails up front (broken WMI, Get-CimInstance error) or ps rejects its flags, the output is empty and becomes an empty table instead of undefined. adoptLeftovers() (line 603/610) then gets past its 'keep the records and retry' guards, marks every recorded dev server 'Exited while the dashboard was down', and saveRunning() deletes dev-servers.json, so live dev servers are never tracked again. On Windows, stopDevServer() likewise gets [] from leftoverTrees and kills nothing, where before it fell back to s.adopted, so the server hangs on 'Stopping…'. Fix: return undefined from windowsProcesses()/processGroups() when the parsed table is empty. The PowerShell or ps process is always in a successful listing.",
+            "file": "server/src/lib/devServers.ts:431"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "fa027ff8-87a3-4a54-b283-3bde34a0a19d",
+      "title": "projects show incorrect last touched date.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-28T19:13:57.747Z",
+      "updatedAt": "2026-10-28T19:23:42.516Z",
+      "notes": "For example music player, it has no commit since 3 month ago but show 5d in the dashboard\n",
+      "sessionId": "47d1dc24-172c-4b1a-9f6e-cf349811b1f3",
+      "doneAt": "2026-10-28T19:19:24.064Z",
+      "reviewer": {
+        "runId": "81951f55-3e14-4f2d-a834-d23eb5a09cc9",
+        "sessionId": "2acf24a1-fe6c-4c18-b866-6df09c013d25",
+        "startedAt": "2026-10-28T19:19:24.616Z",
+        "finishedAt": "2026-10-28T19:20:08.603Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "Reads the newest message timestamp from the end of each session file instead of the file's modified time, which Claude Code bumps when it adds title and mode entries to old sessions. Applied to the session list, last-session date, search and discovery, with a cache so files aren't re-read. Not yet checked against the real music-player sessions.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "lastMessageAt opens each session file with no error handling. If a file is deleted between listJsonl and the read (for example by Claude Code's session cleanup), lastSessionAt fails, so summarise fails and /api/projects returns 500 for every project. Catch the error and fall back to the modified time or skip the file.",
+            "file": "server/src/lib/claudeSessions.ts:101"
+          },
+          {
+            "severity": "low",
+            "text": "When no timestamp is found (a file with only summary or title entries, or a last 2 MB that is one huge line), it falls back to the modified time, which can bring the bug back. lastSessionAt and discoverProjects count every file, including the prompt-less ones listSessions hides, so a stale file like that can still give a project a misleading recent date.",
+            "file": "server/src/lib/claudeSessions.ts:107"
+          },
+          {
+            "severity": "low",
+            "text": "On first load, lastSessionAt and discoverProjects read the last 64 KB (up to 2 MB) of every session file, one at a time, where they used to only check file info. The cache keeps later loads cheap, but the first /api/projects and discover calls get slower with many sessions.",
+            "file": "server/src/lib/claudeSessions.ts:534"
+          }
+        ],
+        "followUps": [
+          "59cce6d0-0de9-48db-8740-a0ba14e7bcde",
+          "8ad68d17-5214-425c-98ff-c04e88b00233"
+        ]
+      }
+    },
+    {
+      "id": "59cce6d0-0de9-48db-8740-a0ba14e7bcde",
+      "title": "Show the newer of last session and last commit as 'last touched'",
+      "notes": "Overview.tsx:134 and Sidebar.tsx:183 use `p.lastSessionAt ?? p.git.lastCommitAt`, so whenever a session exists it wins, even when it's older than the latest commit. A project committed yesterday outside Claude, with a session from three months ago, shows '3mo'. Use whichever of the two is newer.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-28T19:20:08.604Z",
+      "updatedAt": "2026-10-28T19:27:43.808Z",
+      "origin": {
+        "taskId": "fa027ff8-87a3-4a54-b283-3bde34a0a19d",
+        "title": "projects show incorrect last touched date."
+      },
+      "sessionId": "ff2b9a5c-dbdb-4155-9e9f-b60e743c2418",
+      "doneAt": "2026-10-28T19:24:28.978Z",
+      "reviewer": {
+        "runId": "8ff52402-da2a-4b90-917d-20ce596e91c0",
+        "sessionId": "7cdaaac3-9fe2-49d4-867f-8cb12e0a5725",
+        "startedAt": "2026-10-28T19:24:29.628Z",
+        "finishedAt": "2026-10-28T19:24:45.136Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "The two places that mixed session and commit dates now show whichever is newer, through a small newest() helper, so this bug is fixed. Fallbacks are unchanged, and nothing else in the web code combines these two dates.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "If the first date passed to newest() can't be parsed, it is kept as the answer and the valid date after it is ignored. Both inputs are ISO strings built by the server, so this can't happen today, but checking with Number.isFinite would make the helper safe for other callers.",
+            "file": "web/src/lib/util.ts:21"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "8ad68d17-5214-425c-98ff-c04e88b00233",
+      "title": "Handle deleted and timestamp-less session files when computing last activity",
+      "notes": "In claudeSessions.ts lastMessageAt: catch read errors (e.g. ENOENT) so one vanished file can't fail /api/projects. In lastSessionAt and discoverProjects, skip files with no message timestamp instead of using their modified time, so metadata-only files can't make a project look recently used.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 3,
+      "createdAt": "2026-10-28T19:20:08.615Z",
+      "updatedAt": "2026-10-28T19:27:47.637Z",
+      "origin": {
+        "taskId": "fa027ff8-87a3-4a54-b283-3bde34a0a19d",
+        "title": "projects show incorrect last touched date."
+      },
+      "sessionId": "76740b8e-60a0-4fac-a0e1-3c86e8672d04",
+      "doneAt": "2026-10-28T19:25:37.589Z"
+    },
+    {
+      "id": "81a0cb99-76e9-42b4-a384-8d9c29e28b1c",
+      "title": "Simple file explorer",
+      "status": "done",
+      "kind": "idea",
+      "priority": 2,
+      "createdAt": "2026-10-28T19:31:12.373Z",
+      "updatedAt": "2026-10-28T19:37:04.264Z",
+      "notes": "User ability to see map, their content and the content of the files",
+      "sessionId": "66fa31c3-390d-4bd7-aea2-f9175f3f7791",
+      "doneAt": "2026-10-28T19:34:47.141Z",
+      "reviewer": {
+        "runId": "8ba2b630-9555-4324-8a80-d602e73eebaa",
+        "sessionId": "d1e6da8d-f6e6-4301-83dc-4ee04dce58cf",
+        "startedAt": "2026-10-28T19:34:47.400Z",
+        "finishedAt": "2026-10-28T19:35:33.348Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "The file-browsing library, types, router and UI are well built and the path checks are solid, but the three HTTP routes were never added to server/src/index.ts, so the Files tab can't load any folder, file or image.",
+        "findings": [
+          {
+            "severity": "high",
+            "text": "listDir, readFileContent and readImage are imported but never used: there are no routes for GET /api/projects/:id/files, /files/content or /files/raw. In dev every Files request gets a 404. In production the '*' catch-all at line 684 returns index.html with a 200, so res.json() fails with a parse error. Each route needs projectOr404(id).path plus the `path` query param, and /raw needs to send the bytes with the Content-Type from readImage (plus X-Content-Type-Options: nosniff).",
+            "file": "server/src/index.ts:59"
+          },
+          {
+            "severity": "low",
+            "text": "With more than 5,000 entries, the list is cut in readdir order before the sort, so the user sees an arbitrary 5,000 rather than the first 5,000 folders and files by name. The per-entry fs.stat calls also run one at a time, which is slow in big folders like node_modules.",
+            "file": "server/src/lib/files.ts:58"
+          },
+          {
+            "severity": "low",
+            "text": "FileViewer isn't keyed by path, so its `source` state survives a file change: turning on Source for one Markdown file leaves the next one in Source too. Fix with key={filePath} on <FileViewer>.",
+            "file": "web/src/components/FilesPanel.tsx:159"
+          }
+        ],
+        "followUps": [
+          "236cef92-9097-4de1-96d9-864e8cf26ffa",
+          "701f596c-faf5-4d0d-99a3-8dc5c3ac43e8"
+        ]
+      }
+    },
+    {
+      "id": "236cef92-9097-4de1-96d9-864e8cf26ffa",
+      "title": "Add the missing Files API routes",
+      "notes": "Add GET /api/projects/:id/files (listDir), /files/content (readFileContent) and /files/raw (readImage) to server/src/index.ts near the sessions routes. Each takes ?path= and uses projectOr404(id).path. /raw sends the Buffer with readImage's type and X-Content-Type-Options: nosniff. Without these the Files tab doesn't work at all.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 1,
+      "createdAt": "2026-10-28T19:35:33.349Z",
+      "updatedAt": "2026-10-28T19:39:29.285Z",
+      "origin": {
+        "taskId": "81a0cb99-76e9-42b4-a384-8d9c29e28b1c",
+        "title": "Simple file explorer"
+      },
+      "sessionId": "7019af76-c7cd-42e7-b6c8-159fbc571fde",
+      "doneAt": "2026-10-28T19:37:57.851Z",
+      "reviewer": {
+        "runId": "08af700e-9f11-4cb0-b195-1c684e65cec9",
+        "sessionId": "3c1013ea-7c0e-4c47-bdaa-4eb2d7d90066",
+        "startedAt": "2026-10-28T19:37:58.116Z",
+        "finishedAt": "2026-10-28T19:38:25.591Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "The three Files routes are wired correctly to listDir/readFileContent/readImage, match the client's URLs, return clean 400/404s through the existing onError handler, and serve images with the right type and nosniff. The Files tab should now work.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "Filesystem errors outside resolve()'s own checks become a 500 that shows the raw error message: a deleted project folder (realpath ENOENT), a folder that can't be read (readdir EACCES/EPERM, e.g. protected Windows folders), or a file removed between resolve and stat. The UI gets messages like 'ENOENT: … realpath C:\\…' instead of a clean 404/403, and they're logged as server errors.",
+            "file": "server/src/lib/files.ts:41"
+          }
+        ],
+        "followUps": [
+          "1df58f76-37f2-4846-b74b-a1049c5caba5"
+        ]
+      }
+    },
+    {
+      "id": "701f596c-faf5-4d0d-99a3-8dc5c3ac43e8",
+      "title": "Sort before truncating large folder listings in the Files tab",
+      "notes": "In server/src/lib/files.ts listDir, stat entries in parallel (Promise.all, or in batches), sort them, then slice to MAX_ENTRIES. Big folders then show the first entries by name instead of an arbitrary set, and load faster.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 3,
+      "createdAt": "2026-10-28T19:35:33.357Z",
+      "updatedAt": "2026-10-28T19:39:42.125Z",
+      "origin": {
+        "taskId": "81a0cb99-76e9-42b4-a384-8d9c29e28b1c",
+        "title": "Simple file explorer"
+      },
+      "sessionId": "a8859209-a66c-439d-9da0-aee50589d8e6",
+      "doneAt": "2026-10-28T19:38:44.934Z",
+      "reviewer": {
+        "runId": "1c0d2915-47be-4fdd-94f3-f2e3d0f09a76",
+        "sessionId": "9ac0f19f-f7a5-41f6-ba43-1c3195776547",
+        "startedAt": "2026-10-28T19:38:45.209Z",
+        "finishedAt": "2026-10-28T19:39:09.167Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "listDir now stats every entry in parallel batches of 256, sorts, then cuts off at MAX_ENTRIES, so large folders show the first entries in display order. The change is correct and breaks nothing.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "Folders with more than MAX_ENTRIES entries now get every entry statted instead of only the first 5,000, so a folder with 100k entries does more I/O than before even though it runs in parallel. This is the cost of a correct sort and is acceptable, but 'loads faster' only holds for folders under the cap.",
+            "file": "server/src/lib/files.ts:62"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "1df58f76-37f2-4846-b74b-a1049c5caba5",
+      "title": "Map filesystem errors in the Files tab to clean 404/403 responses",
+      "notes": "In server/src/lib/files.ts, catch ENOENT/ENOTDIR (→ FileError 404 'Not found' / 'Project folder is missing') and EACCES/EPERM (→ a new 403 'Permission denied') from realpath of the project root (line 41), the stat/readdir in listDir (56-57), and the stat/open/readFile in readFileContent and readImage. Widen FileError.status to include 403. Then a deleted project or a locked folder shows a readable message in the Files tab instead of a raw 500.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 3,
+      "createdAt": "2026-10-28T19:38:25.593Z",
+      "updatedAt": "2026-10-28T19:41:54.344Z",
+      "origin": {
+        "taskId": "236cef92-9097-4de1-96d9-864e8cf26ffa",
+        "title": "Add the missing Files API routes"
+      },
+      "sessionId": "af65873d-b74c-48e5-9c0b-f05e5624e3b1",
+      "doneAt": "2026-10-28T19:40:45.214Z",
+      "reviewer": {
+        "runId": "8d56cc87-1e53-473b-bbba-e567a76973f4",
+        "sessionId": "aa183047-cef2-4a71-8acd-0f1a6596a00b",
+        "startedAt": "2026-10-28T19:40:45.484Z",
+        "finishedAt": "2026-10-28T19:41:13.523Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "fsCall cleanly maps ENOENT/ENOTDIR to 404 and EACCES/EPERM to 403 at every root/stat/readdir/open/readFile call the task listed, and the server's error handler already passes FileError.status through. Missing project folders and folders the server can't access now show readable messages instead of raw 500s.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "EBUSY isn't mapped. On Windows, opening a file another process holds an exclusive lock on fails with EBUSY, so that 'locked' case still returns a raw 500 whose message includes the absolute path. Adding EBUSY to the 403 branch would cover it.",
+            "file": "server/src/lib/files.ts:41"
+          },
+          {
+            "severity": "low",
+            "text": "fh.read after a successful open isn't wrapped in fsCall, so a read-time failure (e.g. EIO) still returns a raw 500. Rare in practice.",
+            "file": "server/src/lib/files.ts:105"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "a1922032-34f8-4de4-9189-69c270e8a8bf",
+      "title": "Embedded android emulator",
+      "status": "done",
+      "kind": "idea",
+      "priority": 2,
+      "createdAt": "2026-10-29T17:52:55.975Z",
+      "updatedAt": "2026-10-29T18:47:04.334Z",
+      "notes": "We work a lot with android development. A embedded android emulator used for testing would be immaculate. We first need to know how realistic this is, and if there are any available open source emulators which fit our purpose",
+      "planFirst": true,
+      "sessionId": "6691c785-f443-415d-a474-98ad9976c7f9",
+      "plan": "# Embedded Android emulator: feasibility + plan\n\n## Context\nThe task asks how realistic an Android emulator embedded in the dashboard is, and which open-source options fit.\nShort answer: **very realistic**. Android Studio's own \"Running Devices\" pane does exactly this. It runs the stock\nemulator headless and drives it over the emulator's gRPC API. We can do the same from our Node server and draw it in\na new **Android** tab.\n\n### What's on this machine (checked)\n- `ANDROID_HOME` = `%LOCALAPPDATA%\\Android\\Sdk`. Emulator **36.6.11**, `adb` on PATH.\n- AVDs: `Pixel_10` (android-37 x86_64), plus several Pixel 3/4 API 29–30 AVDs.\n- The SDK ships the gRPC protos: `emulator/lib/emulator_controller.proto` (streamScreenshot, sendTouch, sendKey,\n  sendMouse, injectWheel, streamLogcat, setVmState, getStatus, rotation, GPS, battery and so on).\n\n### Options considered\n| Option | License | Fit |\n|---|---|---|\n| **Stock Android Emulator, headless + gRPC** (`emulator -avd X -no-window -grpc <port>`) | Apache 2.0 (AOSP) | **Best.** Already installed, runs the AVDs you already have, gets full emulator control, same approach as Android Studio. |\n| Google `android-emulator-webrtc` (React component + Envoy proxy) | Apache 2.0 | Same backend but needs Envoy + JWT setup and is mostly unmaintained. We'd only borrow ideas from it. |\n| scrcpy / ws-scrcpy (H.264 over adb) | Apache 2.0 / MIT | Good later addition for **physical devices**. Needs a device-side jar and H.264 decoding (WebCodecs). Not needed for emulators. |\n| Waydroid, Anbox, Redroid | GPL / Apache | Linux only (binder kernel modules). Not usable on Windows. |\n| Genymotion | Proprietary | Not open source. |\n| Reparenting the native emulator window into the Tauri window (HWND) | n/a | Fragile, desktop only, breaks the browser version. Rejected. |\n\nLimits to know about: it needs hardware acceleration (WHPX/AEHD, already working if the AVDs run today). The frame\nstream is raw RGB, scaled down by the emulator, so it costs some localhost bandwidth (~1–2 MB per frame at 540 px\nwide, sent only when the screen changes). That's fine for testing, but it's not for gaming-grade frame rates. No\naudio in v1.\n\n## Approach (MVP)\n\n### Server: `server/src/lib/emulator.ts` (new)\n- **SDK discovery:** `ANDROID_HOME` / `ANDROID_SDK_ROOT`, falling back to `%LOCALAPPDATA%\\Android\\Sdk`. List AVDs\n  with `emulator -list-avds`.\n- **Running instances:** read the emulator's discovery files (`%TEMP%\\avd\\running\\pid_*.ini`, which hold\n  `grpc.port` and `grpc.token`). This also lets us attach to emulators started by Android Studio and reattach after a\n  dashboard restart, the same idea as the reattach in `server/src/lib/devServers.ts`.\n- **Start/stop:** `emulator -avd <name> -no-window -grpc <free port> -no-boot-anim`, spawned detached with\n  `windowsHide` (same spawn style as `devServers.ts`), so it outlives a dashboard restart. Stop with\n  `setVmState(SHUTDOWN)` over gRPC, falling back to `adb -s emulator-<port> emu kill`.\n- **gRPC client:** `@grpc/grpc-js` + `@grpc/proto-loader`, loading the proto **from the installed SDK** at runtime\n  so it always matches the emulator version. Send the bearer token from the discovery file when there is one.\n- **Extras:** install APK (`adb install -r`, file picked from the project's build outputs such as\n  `app/build/outputs/apk/**`), rotate, Home/Back/Overview keys, screenshot to file.\n\n### Transport\n- Add `@hono/node-ws` and one WebSocket per viewer at `/api/emulator/:serial/ws`:\n  - server → client: binary frames `[width u16, height u16, rotation u8, …RGB888]` taken from `streamScreenshot`\n    at the viewer's requested width.\n  - client → server: JSON input `{type:\"touch\"|\"key\"|\"wheel\", …}` mapped to `sendTouch` / `sendKey` /\n    `injectWheel`.\n- REST routes in `server/src/index.ts` follow the existing `/api/dev` pattern: `GET /api/emulator` (SDK status,\n  AVDs, running instances), `POST /api/emulator/start {avd}`, `POST /api/emulator/:serial/stop`,\n  `POST /api/emulator/:serial/install {apk}`, and an SSE logcat stream like `devLogStream`.\n\n### Web: `web/src/components/EmulatorPanel.tsx` (new)\n- Add an **Android** tab next to Dev in `web/src/components/ProjectView.tsx` and `Tab` in `web/src/lib/router.ts`.\n  Show it on every project, or only on projects with `build.gradle(.kts)` / `AndroidManifest.xml`.\n- AVD picker, Start/Stop, status (booting, then ready via `getStatus.booted`).\n- `<canvas>` sized to the panel. Paint frames with `ImageData` (RGB to RGBA). Map pointer events to device\n  coordinates (handling rotation) and send touch down/move/up; keyboard goes to `sendKey`; the wheel scrolls.\n- Toolbar: Back / Home / Recents, rotate, install APK, screenshot. Logcat pane below, reusing the log view styling\n  from `DevPanel.tsx`.\n- Clear messages when the SDK or AVDs are missing.\n\n### Later (not in MVP)\n- scrcpy path for physical USB devices.\n- Exposing the emulator to Claude sessions (screenshot + tap tools via MCP) for automated UI testing.\n- Audio, multi-display, snapshots.\n\n## Verification\n1. `npm run typecheck`.\n2. `npm run dev`, open a project, go to the Android tab: the AVD list shows `Pixel_10` and the others.\n3. Start `Pixel_3a_API_30_x86` (light image): status goes booting → ready and the home screen renders on the canvas.\n4. Tap the app drawer, swipe, type into search, press Back and Home: all reach the device.\n5. Rotate: the canvas re-orients and taps still land correctly.\n6. Install an APK from an Android project; it launches and logcat streams.\n7. Restart the dashboard server while the emulator runs: the tab reattaches without restarting the emulator.\n8. Start an emulator from Android Studio: it shows up as running and can be viewed.\n9. Stop: the emulator process exits.",
+      "planApproved": true,
+      "doneAt": "2026-10-29T18:30:30.399Z"
+    },
+    {
+      "id": "e9cb4e6a-e5ab-4054-bfdf-4251db27a23f",
+      "title": "Build, install and launch from the Android tab",
+      "status": "doing",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-29T18:30:08.315Z",
+      "updatedAt": "2026-10-29T23:00:57.000Z",
+      "notes": "One button that runs the project's Gradle assembleDebug (./gradlew or android/gradlew), installs the APK on the running emulator and launches its main activity (adb shell monkey -p <package> 1, or am start). Stream the Gradle output into the panel. Today the tab only installs an APK that was already built. Code: installApk / androidProject in server/src/lib/emulator.ts, EmulatorPanel.tsx.",
+      "origin": {
+        "taskId": "a1922032-34f8-4de4-9189-69c270e8a8bf",
+        "title": "Embedded android emulator"
+      }
+    },
+    {
+      "id": "7cd36a02-8de7-4a67-a8b1-7071cc858c7b",
+      "title": "Let Claude sessions see and tap the emulator",
+      "status": "done",
+      "kind": "idea",
+      "priority": 2,
+      "createdAt": "2026-10-29T18:30:08.315Z",
+      "updatedAt": "2026-10-29T19:30:44.906Z",
+      "notes": "Give task and chat sessions tools to take an emulator screenshot, tap/swipe/type and read logcat (an MCP server backed by server/src/lib/emulator.ts: getScreenshot, streamInputEvent, adb logcat), so Claude can test the app UI it just changed.",
+      "origin": {
+        "taskId": "a1922032-34f8-4de4-9189-69c270e8a8bf",
+        "title": "Embedded android emulator"
+      },
+      "sessionId": "1e0b432b-d266-41be-8716-5488773ee98e",
+      "doneAt": "2026-10-29T19:19:41.986Z",
+      "reviewer": {
+        "runId": "6d688c4c-c8eb-404c-ade5-925b0c1620a6",
+        "sessionId": "086cc1ad-c6c0-4a0c-abd4-9b46ad85dbf5",
+        "startedAt": "2026-10-29T19:19:42.344Z",
+        "finishedAt": "2026-10-29T19:21:01.637Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "A clean, stateless MCP server that lets task and chat sessions screenshot, tap, swipe, type and read logcat on dashboard emulators (gRPC) and on anything else adb sees. It works in the common case; the gaps are an unquoted config path under shell launches and gRPC input calls that can hang.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "When Claude Code is a .cmd/.bat file, claudeCommand() spawns it with shell: true. The --mcp-config path (server/data/mcp.json inside the repo) isn't quoted, so a repo under a folder with a space in its name splits it and every non-read-only task and chat session fails to start. No earlier launch argument could contain a space, so this is new.",
+            "file": "server/src/lib/mcp.ts:30"
+          },
+          {
+            "severity": "low",
+            "text": "inputEvents opens streamInputEvent with no deadline. If the emulator hangs, android_tap/swipe/key/type never return and the Claude session waits forever. Other gRPC calls here use call() with a deadline.",
+            "file": "server/src/lib/emulator.ts:554"
+          },
+          {
+            "severity": "low",
+            "text": "Taps are checked against and scaled by the cached geometry of the last screenshot. On an adb device that has rotated since, a tap without a new screenshot lands in the wrong place and nothing reports an error.",
+            "file": "server/src/lib/androidControl.ts:118"
+          },
+          {
+            "severity": "low",
+            "text": "await c.req.json() throws on a malformed body, so the reply is a generic 500, not a JSON-RPC parse error (-32700).",
+            "file": "server/src/index.ts:896"
+          },
+          {
+            "severity": "low",
+            "text": "The comment 'An API path with no route is a JSON 404…' now sits above the new MCP block, not above the catch-all route it describes.",
+            "file": "server/src/index.ts:893"
+          }
+        ],
+        "followUps": [
+          "9907a5ff-e64e-4b9a-aeda-5f6bc128489a",
+          "8bded4c4-756c-461c-beb1-59ffae7abba7"
+        ]
+      }
+    },
+    {
+      "id": "1b807fee-e464-402a-aadf-0811b70d1966",
+      "title": "Show Android Studio's emulators in the Android tab",
+      "status": "done",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-29T18:30:08.315Z",
+      "updatedAt": "2026-10-29T19:36:21.764Z",
+      "notes": "Emulators started by Android Studio use -grpc-use-jwt, so the tab lists them as running but can't show their screen. The discovery file (pid_*.ini) names a JWKS folder (grpc.jwks); the client can drop its own public key there and sign ES256 tokens, which is how Studio authenticates. See emulator/lib/emulator_access.json for the allowed issuers. Code: runningEmulators / controller in server/src/lib/emulator.ts.",
+      "origin": {
+        "taskId": "a1922032-34f8-4de4-9189-69c270e8a8bf",
+        "title": "Embedded android emulator"
+      },
+      "worktree": {
+        "root": "C:\\Users\\malte\\Documents\\Code\\project-dashboard\\.claude\\worktrees\\task-1b807fee",
+        "path": "C:\\Users\\malte\\Documents\\Code\\project-dashboard\\.claude\\worktrees\\task-1b807fee",
+        "branch": "feature/show-android-studio-s-emulators-in-the-a-1b807fee",
+        "base": "d481472e11616b982bf70177b888436a961a0616"
+      },
+      "review": {
+        "base": "f6ed0fb9ae0f9ef18777d511d5f471a7090d8c03",
+        "head": "d481472e11616b982bf70177b888436a961a0616",
+        "startedAt": "2026-10-29T19:30:52.136Z",
+        "end": "4cbfdbc3f4a6345d59af2241025c9b2cea223896",
+        "endHead": "cb2950eb5d5475f82ba06c967b9af11a15a0ecbc"
+      },
+      "sessionId": "ea98392a-f24d-4d6c-a57e-997cbba115ac",
+      "doneAt": "2026-10-29T19:35:44.961Z",
+      "reviewer": {
+        "runId": "4f15915b-cabc-43c8-9e04-4de572cb03a5",
+        "sessionId": "6669c5f8-df77-4b52-9ac8-cffd0a95f825",
+        "startedAt": "2026-10-29T19:35:45.609Z",
+        "finishedAt": "2026-10-29T19:36:21.751Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "JWT auth for Android Studio's emulators is cleanly done: the new Reachable/Connection setup covers every gRPC caller and waits correctly for the key to load. When an emulator never picks up the key, though, every emulator-list poll stalls for about 5 s.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "registerKey waits up to 5 s (50×100 ms) before statusOf's 2 s limit even starts. When it fails, the connection is deleted, so every emulatorOverview poll starts a new 5 s wait in infoFor. Since the overview awaits all AVDs together, one Studio emulator that won't take the key slows every Android tab refresh.",
+            "file": "server/src/lib/emulator.ts:268"
+          },
+          {
+            "severity": "low",
+            "text": "dashboard-<kid>.jwk is written into the emulator's key folder and never removed. Each dashboard restart makes a new key ID, so the files pile up for as long as the emulator runs (they're useless once their private key is gone).",
+            "file": "server/src/lib/emulator.ts:279"
+          },
+          {
+            "severity": "low",
+            "text": "For an emulator with a key folder, any statusOf failure (including UNAVAILABLE while it's still booting) is reported as 'Couldn't reach the emulator's own API… mirrored through scrcpy' instead of 'booting'.",
+            "file": "server/src/lib/emulator.ts:469"
+          }
+        ],
+        "followUps": [
+          "e491c2e3-d2dc-4add-96db-91207025c46a"
+        ]
+      }
+    },
+    {
+      "id": "3e58e7cf-5e55-4d4a-b88a-3cecfacd33d4",
+      "title": "Physical Android devices in the Android tab (scrcpy)",
+      "status": "done",
+      "kind": "idea",
+      "priority": 3,
+      "createdAt": "2026-10-29T18:30:08.315Z",
+      "updatedAt": "2026-10-29T19:10:09.223Z",
+      "notes": "Mirror USB/Wi-Fi devices too, using scrcpy's server jar over adb (H.264, decoded with WebCodecs in the page). The emulator path uses the emulator's gRPC API, which real devices don't have.",
+      "origin": {
+        "taskId": "a1922032-34f8-4de4-9189-69c270e8a8bf",
+        "title": "Embedded android emulator"
+      },
+      "sessionId": "cfee2ec1-08fd-4cea-980f-ca7b15e6e7b4",
+      "doneAt": "2026-10-29T19:09:04.051Z"
+    },
+    {
+      "id": "8f5f79bf-c924-4617-8bae-9d2387390bc6",
+      "title": "Standing in the android tab and changing project navigates to the android folder of the new project - even if its not a android project",
+      "status": "todo",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-29T18:48:08.932Z",
+      "updatedAt": "2026-10-29T18:48:08.932Z"
+    },
+    {
+      "id": "9907a5ff-e64e-4b9a-aeda-5f6bc128489a",
+      "title": "Quote the MCP config path and time out emulator input streams",
+      "notes": "In claudeRunner.ts, quote the --mcp-config path from mcpLaunchArgs() (mcp.ts) when claudeCommand() returns shell: true, so a repo path with spaces doesn't break every session launch. In emulator.ts inputEvents, give the streamInputEvent call a deadline (or a timer that cancels the stream and rejects), so a hung emulator can't stall android_tap/swipe/key/type.",
+      "status": "todo",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-29T19:21:01.639Z",
+      "updatedAt": "2026-10-29T19:21:01.639Z",
+      "origin": {
+        "taskId": "7cd36a02-8de7-4a67-a8b1-7071cc858c7b",
+        "title": "Let Claude sessions see and tap the emulator"
+      }
+    },
+    {
+      "id": "8bded4c4-756c-461c-beb1-59ffae7abba7",
+      "title": "Show Claude's Android screenshots in the session view",
+      "notes": "toolResultText in server/src/lib/claudeSessions.ts:248 turns image results into '[image]', so you can't see the screenshots Claude took with mcp__dashboard__android_screenshot while testing the UI. Pass image blocks through to the chat and task event stream (perhaps capped in size) and show them inline as thumbnails.",
+      "status": "done",
+      "kind": "feature",
+      "priority": 3,
+      "createdAt": "2026-10-29T19:21:01.651Z",
+      "updatedAt": "2026-10-29T19:47:37.165Z",
+      "origin": {
+        "taskId": "7cd36a02-8de7-4a67-a8b1-7071cc858c7b",
+        "title": "Let Claude sessions see and tap the emulator"
+      },
+      "worktree": {
+        "root": "C:\\Users\\malte\\Documents\\Code\\project-dashboard\\.claude\\worktrees\\task-8bded4c4",
+        "path": "C:\\Users\\malte\\Documents\\Code\\project-dashboard\\.claude\\worktrees\\task-8bded4c4",
+        "branch": "feature/show-claude-s-android-screenshots-in-the-8bded4c4",
+        "base": "d481472e11616b982bf70177b888436a961a0616"
+      },
+      "review": {
+        "base": "f6ed0fb9ae0f9ef18777d511d5f471a7090d8c03",
+        "head": "d481472e11616b982bf70177b888436a961a0616",
+        "startedAt": "2026-10-29T19:30:54.908Z",
+        "end": "725ed0b737633de1ade8aad31542ad154fc78c9e",
+        "endHead": "9d5c495a3f68af50b40739482e31daac70027d45"
+      },
+      "sessionId": "e20f3c73-7300-43f7-9e80-8047eddb4ed4",
+      "doneAt": "2026-10-29T19:47:05.677Z",
+      "reviewer": {
+        "runId": "5d6e175e-3cd5-49d6-940a-c2597ec45b5a",
+        "sessionId": "fd0a803c-bd24-49e2-bc5a-f285dacf4a44",
+        "startedAt": "2026-10-29T19:47:06.208Z",
+        "finishedAt": "2026-10-29T19:47:37.150Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "Image blocks from tool results now reach the transcript as thumbnails with a full-size view. Parsing and per-image size limits are sound, and transcripts loaded from disk keep only the newest 40 images. Live runs have no such cap: every screenshot stays in the run's event buffer and is replayed to each viewer.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "The run event buffer only caps `delta` events, so every `tool_result` with its base64 screenshots is kept for the whole run plus 15 minutes after it ends, and the whole buffer is replayed to every viewer that attaches. A UI-testing session with dozens of screenshots holds and resends tens of MB, and the browser's chat store keeps it all too. The MAX_TRANSCRIPT_IMAGES cap only applies to transcripts read from disk.",
+            "file": "server/src/lib/runs.ts:121"
+          }
+        ],
+        "followUps": [
+          "4ed6028c-2abc-4459-a534-4fd3416f4a39"
+        ]
+      }
+    },
+    {
+      "id": "e491c2e3-d2dc-4add-96db-91207025c46a",
+      "title": "Stop a Studio emulator that rejects the dashboard's key from stalling the Android tab",
+      "notes": "In server/src/lib/emulator.ts, registerKey waits up to 5 s and its failure deletes the connection, so every emulatorOverview poll starts the wait again and the list takes 5 s or more each time. Remember a failed key load per pid (e.g. a Map<pid, message>, cleared by pruneClients) so infoFor answers with the mirrored message right away, or bound statusOf's whole wait, key load included, to the 2 s limit. While there, delete the dashboard-<kid>.jwk files on server shutdown, or reuse a single key ID across restarts so they stop piling up.",
+      "status": "todo",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-29T19:36:21.754Z",
+      "updatedAt": "2026-10-29T19:36:21.754Z",
+      "origin": {
+        "taskId": "1b807fee-e464-402a-aadf-0811b70d1966",
+        "title": "Show Android Studio's emulators in the Android tab"
+      }
+    },
+    {
+      "id": "4ed6028c-2abc-4459-a534-4fd3416f4a39",
+      "title": "Cap the screenshots a live run keeps and replays",
+      "notes": "In server/src/lib/runs.ts `emit`, once a run holds more than about 40 images (the same limit as MAX_TRANSCRIPT_IMAGES in claudeSessions.ts), remove `images` from the oldest stored `tool_result` events, so each later attach replays only the newest ones. Do the same in web/src/lib/chatStore.ts's `tool_result` handler, so a long live session doesn't build up unlimited data: URLs in the browser. Older thumbnails then just disappear, the same as for transcripts loaded from disk.",
+      "status": "todo",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-29T19:47:37.152Z",
+      "updatedAt": "2026-10-29T19:47:37.152Z",
+      "origin": {
+        "taskId": "8bded4c4-756c-461c-beb1-59ffae7abba7",
+        "title": "Show Claude's Android screenshots in the session view"
+      }
+    },
+    {
+      "id": "bb562747-c0c7-438c-ab42-1e409947cf86",
+      "title": "Frame rate and latency of the embedded android emulator",
+      "status": "todo",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-29T20:52:40.875Z",
+      "updatedAt": "2026-10-29T20:52:40.875Z"
+    },
+    {
+      "id": "cf3ce688-06e4-44bb-a5f3-cb26820d5b94",
+      "title": "Tasks with merged branches still asks for review",
+      "status": "todo",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-29T20:55:32.421Z",
+      "updatedAt": "2026-10-29T20:55:32.421Z"
+    },
+    {
+      "id": "d9990fc3-557a-4291-a423-8f811b32ae8f",
+      "title": "Task maintenance.",
+      "notes": "Check for finished tasks and commit them if no further review is needed. If the task is stuck in Review but the branch is merged you can go ahead and close it.\nif no tasks are in progress please move the item with the highest priority to the in progress lane.",
+      "status": "doing",
+      "kind": "chore",
+      "priority": 2,
+      "createdAt": "2026-10-29T23:00:30.014Z",
+      "updatedAt": "2026-10-29T23:00:32.702Z",
+      "scheduleId": "b4fc63be-f089-4afe-93f7-7f4dd370e51a",
+      "review": {
+        "base": "e136effc8fff385259282a15a7eb74e09aca4b0e",
+        "head": "b39fe5e82e6cb78e8dff295fbe14f3f3dc3a79f7",
+        "startedAt": "2026-10-29T23:00:30.326Z"
+      },
+      "sessionId": "6d7dd059-e05a-4a9a-ade9-0220dc54008c"
     }
   ]
 }
