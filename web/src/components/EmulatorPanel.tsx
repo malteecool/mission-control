@@ -397,7 +397,7 @@ function ConnectForm({ onConnected }: { onConnected: (output: string) => void })
 
 type Target = { key: string; kind: "emulator"; info: EmulatorInfo } | { key: string; kind: "device"; info: DeviceInfo };
 
-/** An emulator the dashboard can't show through gRPC (started by Android Studio), but can through scrcpy. */
+/** An emulator the dashboard can't show through gRPC, but can through scrcpy. */
 const mirrored = (e: EmulatorInfo) => e.state === "running" && !e.viewable && !!e.serial;
 
 /** What shows the target's screen, if it can be shown now. */

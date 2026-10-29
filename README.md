@@ -127,8 +127,10 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   focused; the buttons below it are Back, Home, Recents, Rotate, Power and Screenshot. Logcat (via `adb logcat`) runs
   alongside, with a filter. **Install APK** runs `adb install -r` with an APK from the project's
   `<module>/build/outputs/apk` folders. Emulators keep running when the dashboard restarts and are found again from
-  the files they advertise themselves in. One started by Android Studio only accepts Studio's own gRPC tokens, so its
-  screen is mirrored through scrcpy instead (below). Needs the SDK's emulator and platform tools (found through
+  the files they advertise themselves in. Ones started by Android Studio show up too: they only take signed JWTs
+  (`-grpc-use-jwt`), so the dashboard drops its own public key in the folder the emulator loads keys from and signs
+  its calls the way Studio does. One whose gRPC API can't be reached is mirrored through scrcpy instead (below).
+  Needs the SDK's emulator and platform tools (found through
   `ANDROID_HOME`, `ANDROID_SDK_ROOT` or Android Studio's default location) and at least one AVD.
 
   **Physical devices** that adb sees (USB with USB debugging on, or Wi-Fi) are listed under the AVDs and mirrored with

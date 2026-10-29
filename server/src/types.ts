@@ -301,7 +301,7 @@ export interface EmulatorInfo {
   /** The adb serial (`emulator-5554`) while it runs. */
   serial?: string;
   pid?: number;
-  /** Whether the dashboard can show its screen: false when it runs without a gRPC token we can read (Android Studio). */
+  /** Whether the dashboard can show its screen through the emulator's gRPC API (else it's mirrored with scrcpy). */
   viewable: boolean;
   /** Device screen size in pixels, portrait. */
   screen?: { width: number; height: number };

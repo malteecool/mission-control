@@ -1,6 +1,6 @@
-// What Claude sessions use to look at and drive an Android screen (the tools in mcp.ts). Emulators the dashboard
-// started go through the emulator's gRPC API (emulator.ts); anything else adb sees (physical devices, emulators started
-// by Android Studio) goes through adb: screencap, input, logcat.
+// What Claude sessions use to look at and drive an Android screen (the tools in mcp.ts). Emulators with a gRPC API the
+// dashboard can call (its own and Android Studio's) go through it (emulator.ts); anything else adb sees (physical
+// devices, emulators without one) goes through adb: screencap, input, logcat.
 import zlib from "node:zlib";
 import { execFile } from "node:child_process";
 import {

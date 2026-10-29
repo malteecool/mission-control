@@ -3,6 +3,9 @@
 // (emulator/lib/emulator_controller.proto, loaded from the installed SDK so it always matches the emulator) streams
 // the screen and takes touches and keys. Running emulators are found through the discovery files each one writes
 // (`<temp>/avd/running/pid_<pid>.ini`), so they outlive a dashboard restart and ones started elsewhere show up too.
+// Android Studio starts its emulators with `-grpc-use-jwt` instead; those are reached by signing JWTs with a key we
+// hand them, as Studio does.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -95,8 +98,19 @@ interface Running {
   /** Console port; the adb serial is `emulator-<port>`. */
   consolePort: number;
   grpcPort?: number;
+  /** With `-grpc-use-token` (started from the dashboard): sent as is. */
   token?: string;
+  /**
+   * With `-grpc-use-jwt` (started by Android Studio): the folder it loads public keys from, and the file it lists the
+   * loaded ones in. Calls carry a JWT signed with our own key, the way Studio does it.
+   */
+  jwks?: { dir: string; active: string };
 }
+
+/** An emulator whose gRPC API the dashboard can call. */
+type Reachable = Running & { grpcPort: number };
+
+const reachable = (r: Running): r is Reachable => !!r.grpcPort && !!(r.token || r.jwks);
 
 function runningDirs(): string[] {
   const dirs = [path.join(os.tmpdir(), "avd", "running")];
@@ -152,17 +166,18 @@ function runningEmulators(): Running[] {
         consolePort: Number(ini["port.serial"]),
         grpcPort: ini["grpc.port"] ? Number(ini["grpc.port"]) : undefined,
         token: ini["grpc.token"] || undefined,
+        jwks: ini["grpc.jwks"] && ini["grpc.jwk_active"] ? { dir: ini["grpc.jwks"], active: ini["grpc.jwk_active"] } : undefined,
       });
     }
   }
   return found;
 }
 
-function runningOr409(avd: string): Running & { grpcPort: number; token: string } {
+function runningOr409(avd: string): Reachable {
   const r = runningEmulators().find((r) => r.avd === avd);
   if (!r) throw new EmulatorError(409, `${avd} isn't running`);
-  if (!r.grpcPort || !r.token) throw new EmulatorError(409, `${avd} wasn't started from the dashboard, so its screen can't be shown here`);
-  return r as Running & { grpcPort: number; token: string };
+  if (!reachable(r)) throw new EmulatorError(409, `${avd} runs without a gRPC endpoint the dashboard can use, so its screen can't be shown here`);
+  return r;
 }
 
 // ── gRPC ────────────────────────────────────────────────────────────────────
@@ -172,9 +187,17 @@ type Controller = grpc.Client & Record<string, (...args: unknown[]) => unknown>;
 type ControllerCtor = new (address: string, creds: grpc.ChannelCredentials, options?: grpc.ChannelOptions) => Controller;
 
 let ctor: ControllerCtor | undefined;
-const clients = new Map<string, { client: Controller; md: grpc.Metadata }>();
 
-function controller(r: Running & { grpcPort: number; token: string }) {
+interface Connection {
+  client: Controller;
+  /** Settles once calls can be authorized (a JWT emulator has loaded our key). */
+  ready: Promise<void>;
+  /** Metadata for a call starting now. */
+  md: () => grpc.Metadata;
+}
+const clients = new Map<string, Connection>();
+
+function controller(r: Reachable): Connection {
   const key = `${r.pid}:${r.grpcPort}`;
   let c = clients.get(key);
   if (c) return c;
@@ -192,18 +215,87 @@ function controller(r: Running & { grpcPort: number; token: string }) {
   }
   // Full-size frames are several MB, well past gRPC's default 4 MB limit.
   const client = new ctor(`127.0.0.1:${r.grpcPort}`, grpc.credentials.createInsecure(), { "grpc.max_receive_message_length": -1 });
-  const md = new grpc.Metadata();
-  md.set("authorization", `Bearer ${r.token}`);
-  c = { client, md };
+  const bearer = (token: string) => {
+    const md = new grpc.Metadata();
+    md.set("authorization", `Bearer ${token}`);
+    return md;
+  };
+  if (r.token) {
+    const md = bearer(r.token);
+    c = { client, ready: Promise.resolve(), md: () => md };
+  } else {
+    const ready = registerKey(r.jwks!);
+    // Try again next time rather than keeping a connection that can't authorize.
+    ready.catch(() => {
+      if (clients.get(key) !== c) return;
+      clients.delete(key);
+      client.close();
+    });
+    c = { client, ready, md: () => bearer(jwt()) };
+  }
   clients.set(key, c);
   return c;
 }
 
-function call<T>(r: Running & { grpcPort: number; token: string }, method: string, req: unknown, timeoutMs = 5000): Promise<T> {
-  const { client, md } = controller(r);
+async function call<T>(r: Reachable, method: string, req: unknown, timeoutMs = 5000): Promise<T> {
+  const { client, ready, md } = controller(r);
+  await ready;
   return new Promise((resolve, reject) => {
-    client[method](req, md, { deadline: Date.now() + timeoutMs }, (err: Error | null, res: T) => (err ? reject(err) : resolve(res)));
+    client[method](req, md(), { deadline: Date.now() + timeoutMs }, (err: Error | null, res: T) => (err ? reject(err) : resolve(res)));
   });
+}
+
+// ── JWT (emulators started by Android Studio) ───────────────────────────────
+
+/** This process's signing key, made on first use. The emulator gets its public half as a JWK. */
+let signer: { kid: string; privateKey: crypto.KeyObject; jwk: object } | undefined;
+let token: { jwt: string; exp: number } | undefined;
+
+function signingKey() {
+  if (!signer) {
+    const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const kid = crypto.randomUUID();
+    signer = { kid, privateKey, jwk: { ...publicKey.export({ format: "jwk" }), kid, alg: "ES256", use: "sig" } };
+  }
+  return signer;
+}
+
+/**
+ * Drops our public key in the emulator's JWKS folder, then waits for it to show up in the emulator's list of loaded
+ * keys (it watches the folder, so this takes a moment).
+ */
+async function registerKey(jwks: { dir: string; active: string }) {
+  const { kid, jwk } = signingKey();
+  const loaded = () => {
+    try {
+      return (JSON.parse(fs.readFileSync(jwks.active, "utf8")) as { keys?: Array<{ kid?: string }> }).keys?.some((k) => k.kid === kid) ?? false;
+    } catch {
+      return false; // Missing or mid-write.
+    }
+  };
+  if (loaded()) return;
+  fs.writeFileSync(path.join(jwks.dir, `dashboard-${kid}.jwk`), JSON.stringify({ keys: [jwk] }));
+  for (let i = 0; i < 50; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (loaded()) return;
+  }
+  throw new Error("The emulator didn't pick up the dashboard's key");
+}
+
+/**
+ * A JWT for any call, renewed well before it expires. The emulator only accepts issuers in its
+ * emulator/lib/emulator_access.json; "android-studio" may call everything on EmulatorController without an `aud`.
+ */
+function jwt(): string {
+  const now = Math.floor(Date.now() / 1000);
+  if (token && token.exp - now > 600) return token.jwt;
+  const { kid, privateKey } = signingKey();
+  const part = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  // No `typ` in the header: the emulator's validator rejects it.
+  const body = `${part({ alg: "ES256", kid })}.${part({ iss: "android-studio", iat: now - 60, exp: now + 3600 })}`;
+  const sig = crypto.sign("sha256", Buffer.from(body), { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("base64url");
+  token = { jwt: `${body}.${sig}`, exp: now + 3600 };
+  return token.jwt;
 }
 
 /** Drops clients for emulators that are gone. */
@@ -224,7 +316,7 @@ interface Status {
 /** Portrait screen size, read from the emulator's hardware config. Cached per instance (it doesn't change). */
 const screens = new Map<number, { width: number; height: number }>();
 
-async function statusOf(r: Running & { grpcPort: number; token: string }) {
+async function statusOf(r: Reachable) {
   const s = await call<Status>(r, "getStatus", {}, 2000);
   if (!screens.has(r.pid)) {
     const hw = Object.fromEntries((s.hardwareConfig?.entry ?? []).map((e) => [e.key, e.value]));
@@ -334,8 +426,8 @@ export async function stopEmulator(avd: string): Promise<boolean> {
     return false;
   }
   stopping.set(avd, r.pid);
-  if (r.grpcPort && r.token) {
-    const ok = await call(r as Running & { grpcPort: number; token: string }, "setVmState", { state: "SHUTDOWN" }).then(
+  if (reachable(r)) {
+    const ok = await call(r, "setVmState", { state: "SHUTDOWN" }).then(
       () => true,
       () => false,
     );
@@ -365,14 +457,18 @@ async function infoFor(avd: string, r: Running | undefined): Promise<EmulatorInf
   if (r) {
     const base = { avd, serial: `emulator-${r.consolePort}`, pid: r.pid };
     if (stopping.get(avd) === r.pid) return { ...base, state: "stopping", viewable: false };
-    if (!r.grpcPort || !r.token)
+    if (!reachable(r))
       return {
         ...base,
         state: "running",
         viewable: false,
-        message: "Started outside the dashboard (by Android Studio?), so it's mirrored through scrcpy instead of the emulator's own API.",
+        message: "Started without a gRPC endpoint the dashboard can use, so it's mirrored through scrcpy instead of the emulator's own API.",
       };
-    const status = await statusOf(r as Running & { grpcPort: number; token: string }).catch(() => undefined);
+    let failure: string | undefined;
+    const status = await statusOf(r).catch((e: Error) => void (failure = (e as grpc.ServiceError).details || e.message));
+    // One of Studio's that won't take our key: mirror it instead (one of ours just isn't up yet).
+    if (!status && r.jwks)
+      return { ...base, state: "running", viewable: false, message: `Couldn't reach the emulator's own API (${failure}), so it's mirrored through scrcpy.` };
     return { ...base, state: status?.booted ? "running" : "booting", viewable: !!status, screen: status?.screen };
   }
   if (stillStopping(avd)) return { avd, state: "stopping", pid: stopping.get(avd), viewable: false };
@@ -416,18 +512,33 @@ export type ScreenInput =
  */
 export function openScreen(avd: string, send: (frame: Uint8Array<ArrayBuffer>) => void, onError: (message: string) => void) {
   const r = runningOr409(avd);
-  const { client, md } = controller(r);
+  const { client, ready, md } = controller(r);
   let stream: grpc.ClientReadableStream<Frame> | undefined;
+  /** Counts size requests, so only the latest one starts a stream once calls can be authorized. */
+  let sizes = 0;
   // One ordered stream for all input: separate calls can overtake each other, turning a tap into a long press.
   let events: grpc.ClientWritableStream<unknown> | undefined;
   let rotation = 0;
   let closed = false;
+  let authorized = false;
   let touching = false;
   let scrolling = false;
+  const ignore = () => {};
+
+  ready.then(
+    () => (authorized = true),
+    (e: Error) => !closed && onError(e.message),
+  );
 
   const watch = (width: number, height: number) => {
     stream?.cancel();
-    const s = client.streamScreenshot({ format: "RGB888", width, height }, md) as grpc.ClientReadableStream<Frame>;
+    stream = undefined;
+    const asked = ++sizes;
+    // A rejected `ready` was reported above.
+    ready.then(() => asked === sizes && !closed && startStream(width, height), ignore);
+  };
+  const startStream = (width: number, height: number) => {
+    const s = client.streamScreenshot({ format: "RGB888", width, height }, md()) as grpc.ClientReadableStream<Frame>;
     stream = s;
     s.on("data", (img: Frame) => {
       rotation = Math.max(0, ROTATIONS.indexOf(img.format.rotation?.rotation ?? "PORTRAIT"));
@@ -446,10 +557,10 @@ export function openScreen(avd: string, send: (frame: Uint8Array<ArrayBuffer>) =
 
   const screen = () => screens.get(r.pid);
   const toDevice = (x: number, y: number) => portraitPoint(screen(), rotation, x, y);
-  const ignore = () => {};
   const sendEvent = (event: Record<string, unknown>) => {
+    if (!authorized) return; // Nothing is on screen yet to aim at.
     if (!events) {
-      const e = client.streamInputEvent(md, ignore) as grpc.ClientWritableStream<unknown>;
+      const e = client.streamInputEvent(md(), ignore) as grpc.ClientWritableStream<unknown>;
       e.on("error", () => events === e && (events = undefined));
       events = e;
     }
@@ -516,9 +627,9 @@ export async function screenshot(avd: string): Promise<Buffer> {
 
 // ── For Claude sessions (mcp.ts) ───────────────────────────────────────────
 
-/** Running emulators: their adb serial, and whether the dashboard can drive them over gRPC (it started them). */
+/** Running emulators: their adb serial, and whether the dashboard can drive them over gRPC. */
 export function runningEmulatorTargets(): Array<{ avd: string; serial: string; grpc: boolean }> {
-  return runningEmulators().map((r) => ({ avd: r.avd, serial: `emulator-${r.consolePort}`, grpc: !!(r.grpcPort && r.token) }));
+  return runningEmulators().map((r) => ({ avd: r.avd, serial: `emulator-${r.consolePort}`, grpc: reachable(r) }));
 }
 
 /** A PNG of the screen as shown (rotated), scaled by the emulator to fit `maxWidth`×`maxHeight`. */
@@ -551,10 +662,11 @@ export async function keyInput(avd: string, input: { key: string } | { text: str
   await inputEvents(runningOr409(avd), [{ key_event: { eventType: "keypress", ...input } }], 0);
 }
 
-function inputEvents(r: Running & { grpcPort: number; token: string }, events: unknown[], stepMs: number): Promise<void> {
-  const { client, md } = controller(r);
+async function inputEvents(r: Reachable, events: unknown[], stepMs: number): Promise<void> {
+  const { client, ready, md } = controller(r);
+  await ready;
   return new Promise((resolve, reject) => {
-    const stream = client.streamInputEvent(md, (err: Error | null) => (err ? reject(err) : resolve())) as grpc.ClientWritableStream<unknown>;
+    const stream = client.streamInputEvent(md(), (err: Error | null) => (err ? reject(err) : resolve())) as grpc.ClientWritableStream<unknown>;
     let i = 0;
     const next = () => {
       if (i >= events.length) return stream.end();
