@@ -30,17 +30,37 @@ export class EmulatorError extends Error {
 
 const exe = (name: string) => (process.platform === "win32" ? `${name}.exe` : name);
 
-/** The Android SDK folder: ANDROID_HOME, ANDROID_SDK_ROOT or where Android Studio puts it. */
-export function sdkRoot(): string | undefined {
+function sdkCandidates(): string[] {
   const home = os.homedir();
-  const candidates = [
+  return [
     process.env.ANDROID_HOME,
     process.env.ANDROID_SDK_ROOT,
     process.platform === "win32" && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Android", "Sdk") : undefined,
     process.platform === "darwin" ? path.join(home, "Library", "Android", "sdk") : undefined,
     process.platform === "linux" ? path.join(home, "Android", "Sdk") : undefined,
-  ];
-  return candidates.find((c): c is string => !!c && fs.existsSync(path.join(c, "emulator", exe("emulator"))));
+  ].filter((c): c is string => !!c);
+}
+
+/** The Android SDK folder: ANDROID_HOME, ANDROID_SDK_ROOT or where Android Studio puts it. */
+export function sdkRoot(): string | undefined {
+  return sdkCandidates().find((c) => fs.existsSync(path.join(c, "emulator", exe("emulator"))));
+}
+
+/** adb from the SDK's platform-tools, or from PATH (physical devices don't need the emulator). */
+export function adbPath(): string | undefined {
+  const inSdk = sdkCandidates().map(adbBin).find((p) => fs.existsSync(p));
+  if (inSdk) return inSdk;
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((d) => path.join(d, exe("adb")))
+    .find((p) => fs.existsSync(p));
+}
+
+export function adbOr409(): string {
+  const adb = adbPath();
+  if (!adb) throw new EmulatorError(409, "adb not found. Install the Android SDK's platform tools, or set ANDROID_HOME.");
+  return adb;
 }
 
 function sdkOr409(): string {
@@ -52,7 +72,7 @@ function sdkOr409(): string {
 const emulatorBin = (sdk: string) => path.join(sdk, "emulator", exe("emulator"));
 const adbBin = (sdk: string) => path.join(sdk, "platform-tools", exe("adb"));
 
-function run(file: string, args: string[], timeout = 15_000): Promise<{ code: number; stdout: string; stderr: string }> {
+export function run(file: string, args: string[], timeout = 15_000): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     execFile(file, args, { timeout, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
@@ -350,7 +370,7 @@ async function infoFor(avd: string, r: Running | undefined): Promise<EmulatorInf
         ...base,
         state: "running",
         viewable: false,
-        message: "Started outside the dashboard (by Android Studio?), so its screen can't be shown here. Stop it and start it from here instead.",
+        message: "Started outside the dashboard (by Android Studio?), so it's mirrored through scrcpy instead of the emulator's own API.",
       };
     const status = await statusOf(r as Running & { grpcPort: number; token: string }).catch(() => undefined);
     return { ...base, state: status?.booted ? "running" : "booting", viewable: !!status, screen: status?.screen };
@@ -508,7 +528,11 @@ export async function rotate(avd: string) {
 export function logcatStream(avd: string): ReadableStream<Uint8Array> {
   const r = runningEmulators().find((r) => r.avd === avd);
   if (!r) throw new EmulatorError(409, `${avd} isn't running`);
-  const adb = adbBin(sdkOr409());
+  return adbLogcatStream(adbBin(sdkOr409()), `emulator-${r.consolePort}`);
+}
+
+/** `adb logcat` for any device, in the format above. */
+export function adbLogcatStream(adb: string, serial: string): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   let child: ChildProcess | undefined;
   let keepAlive: ReturnType<typeof setInterval> | undefined;
@@ -529,7 +553,7 @@ export function logcatStream(avd: string): ReadableStream<Uint8Array> {
           // Already closed.
         }
       };
-      child = spawn(adb, ["-s", `emulator-${r.consolePort}`, "logcat", "-v", "threadtime", "-T", "500"], {
+      child = spawn(adb, ["-s", serial, "logcat", "-v", "threadtime", "-T", "500"], {
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -611,11 +635,16 @@ export function androidProject(dir: string): AndroidProjectInfo {
   return { isAndroid: gradle || manifest || apks.length > 0, apks: apks.map(({ mtime: _, ...a }) => a) };
 }
 
-export async function installApk(dir: string, apk: string, avd: string): Promise<string> {
+/** Installs one of the project's APKs on an emulator (by AVD) or a device (by adb serial). */
+export async function installApk(dir: string, apk: string, target: { avd: string } | { serial: string }): Promise<string> {
   if (!androidProject(dir).apks.some((a) => a.path === apk)) throw new EmulatorError(404, `No built APK at ${apk}`);
-  const r = runningEmulators().find((r) => r.avd === avd);
-  if (!r) throw new EmulatorError(409, `${avd} isn't running`);
-  const res = await run(adbBin(sdkOr409()), ["-s", `emulator-${r.consolePort}`, "install", "-r", "-t", path.join(dir, apk)], 180_000);
+  let serial: string;
+  if ("avd" in target) {
+    const r = runningEmulators().find((r) => r.avd === target.avd);
+    if (!r) throw new EmulatorError(409, `${target.avd} isn't running`);
+    serial = `emulator-${r.consolePort}`;
+  } else serial = target.serial;
+  const res = await run(adbOr409(), ["-s", serial, "install", "-r", "-t", path.join(dir, apk)], 180_000);
   const out = (res.stdout + res.stderr).trim();
   if (res.code !== 0 || !/Success/.test(out)) throw new Error(out || "adb install failed");
   return out;

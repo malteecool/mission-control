@@ -19,6 +19,7 @@ import type {
   AndroidProjectInfo,
   EmulatorInfo,
   EmulatorOverview,
+  DeviceOverview,
   DirListing,
   FileContent,
   Task,
@@ -125,8 +126,12 @@ export const api = {
   rotateEmulator: (avd: string) => request<void>("POST", `/api/emulator/${encodeURIComponent(avd)}/rotate`),
   emulatorScreenshotUrl: (avd: string) => `/api/emulator/${encodeURIComponent(avd)}/screenshot`,
   androidProject: (id: number) => request<AndroidProjectInfo>("GET", `/api/projects/${id}/android`),
-  installApk: (id: number, avd: string, apk: string) =>
-    request<{ output: string }>("POST", `/api/projects/${id}/android/install`, { avd, apk }),
+  installApk: (id: number, target: { avd: string } | { serial: string }, apk: string) =>
+    request<{ output: string }>("POST", `/api/projects/${id}/android/install`, { ...target, apk }),
+  devices: () => request<DeviceOverview>("GET", "/api/devices"),
+  connectDevice: (address: string, code?: string) => request<{ output: string }>("POST", "/api/devices/connect", { address, code }),
+  disconnectDevice: (serial: string) => request<void>("POST", `/api/devices/${encodeURIComponent(serial)}/disconnect`),
+  deviceScreenshotUrl: (serial: string) => `/api/devices/${encodeURIComponent(serial)}/screenshot`,
 
   overview: () => request<Overview>("GET", "/api/overview"),
   health: () => request<ProjectHealth[]>("GET", "/api/health"),

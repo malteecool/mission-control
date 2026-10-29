@@ -127,9 +127,18 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   focused; the buttons below it are Back, Home, Recents, Rotate, Power and Screenshot. Logcat (via `adb logcat`) runs
   alongside, with a filter. **Install APK** runs `adb install -r` with an APK from the project's
   `<module>/build/outputs/apk` folders. Emulators keep running when the dashboard restarts and are found again from
-  the files they advertise themselves in. One started by Android Studio shows up as running but its screen can't be
-  shown, since it only accepts Android Studio's own tokens. Needs the SDK's emulator and platform tools (found through
+  the files they advertise themselves in. One started by Android Studio only accepts Studio's own gRPC tokens, so its
+  screen is mirrored through scrcpy instead (below). Needs the SDK's emulator and platform tools (found through
   `ANDROID_HOME`, `ANDROID_SDK_ROOT` or Android Studio's default location) and at least one AVD.
+
+  **Physical devices** that adb sees (USB with USB debugging on, or Wi-Fi) are listed under the AVDs and mirrored with
+  [scrcpy](https://github.com/Genymobile/scrcpy)'s server: the dashboard pushes `scrcpy-server` to the device, runs it
+  over an `adb forward` tunnel and the page decodes its H.264 stream with WebCodecs. Tapping, swiping, scrolling,
+  typing, the buttons, Logcat and **Install APK** work as for the emulator. The server jar is pinned to scrcpy 5.0.1
+  (client and server must match exactly), downloaded once from scrcpy's GitHub release into `server/data/scrcpy` and
+  checked against its SHA-256; scrcpy itself needn't be installed. **Wi-Fi…** connects a device with `adb connect
+  host:port`, or pairs one first with `adb pair` when you enter the code from Android 11+'s Wireless debugging screen.
+  Only adb is needed for this (from the SDK's platform-tools or `PATH`), not the emulator.
 - **Cost and usage:** when a dashboard run finishes, its reported cost and turns are stored in `dashboard.db`. The
   overview totals them per day, per project and per task, each project has a **Usage** tab, and task cards show
   what they've cost so far. Chat replies in a task's session count towards that task. Runs that are stopped

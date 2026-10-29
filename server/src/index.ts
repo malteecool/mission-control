@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { serve, upgradeWebSocket } from "@hono/node-server";
 import { WebSocketServer } from "ws";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -72,6 +72,7 @@ import {
   stopEmulator,
   type ScreenInput,
 } from "./lib/emulator.ts";
+import { SERIAL, connectDevice, deviceLogcat, deviceOverview, deviceScreenshot, disconnectDevice, openDeviceScreen } from "./lib/scrcpy.ts";
 import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopAllDevServers, stopDevServer } from "./lib/devServers.ts";
 import type {
   ChatRequest,
@@ -687,19 +688,25 @@ app.get("/api/emulator/:avd/logcat", (c) => {
   return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" } });
 });
 
-// The screen: binary frames out, JSON input (see ScreenInput) in. A WebSocket has no CORS, so any web page could
-// open one to localhost; the Origin check keeps it to our own UI (the Host check above blocks DNS rebinding).
+// A WebSocket has no CORS, so any web page could open one to localhost; the Origin check keeps it to our own UI (the
+// Host check above blocks DNS rebinding).
+const localOrigin: MiddlewareHandler = async (c, next) => {
+  const origin = c.req.header("origin");
+  let host = "";
+  try {
+    host = origin ? new URL(origin).hostname : "";
+  } catch {
+    // Not a URL.
+  }
+  if (!["localhost", "127.0.0.1", "[::1]", "tauri.localhost"].includes(host)) return c.json({ error: "Forbidden origin" }, 403);
+  await next();
+};
+
+// The screen: binary frames out, JSON input (see ScreenInput) in.
 app.get(
   "/api/emulator/:avd/screen",
+  localOrigin,
   async (c, next) => {
-    const origin = c.req.header("origin");
-    let host = "";
-    try {
-      host = origin ? new URL(origin).hostname : "";
-    } catch {
-      // Not a URL.
-    }
-    if (!["localhost", "127.0.0.1", "[::1]", "tauri.localhost"].includes(host)) return c.json({ error: "Forbidden origin" }, 403);
     avdOr400(c.req.param("avd"));
     await next();
   },
@@ -740,12 +747,95 @@ app.get(
 app.get("/api/projects/:id/android", (c) => c.json(androidProject(projectOr404(c.req.param("id")).path)));
 
 // `{ "apk": "app/build/outputs/apk/debug/app-debug.apk", "avd": "Pixel_10" }`: one of the APKs the route above lists.
+// A physical device is given by `"serial"` instead of `"avd"`.
 app.post("/api/projects/:id/android/install", async (c) => {
   const p = projectOr404(c.req.param("id"));
-  const body = (await c.req.json().catch(() => ({}))) as { apk?: unknown; avd?: unknown };
-  if (typeof body.apk !== "string" || typeof body.avd !== "string") throw new HttpError(400, "apk and avd are required");
-  return c.json({ output: await installApk(p.path, body.apk, avdOr400(body.avd)) });
+  const body = (await c.req.json().catch(() => ({}))) as { apk?: unknown; avd?: unknown; serial?: unknown };
+  if (typeof body.apk !== "string") throw new HttpError(400, "apk is required");
+  if (typeof body.serial === "string") return c.json({ output: await installApk(p.path, body.apk, { serial: serialOr400(body.serial) }) });
+  if (typeof body.avd !== "string") throw new HttpError(400, "avd or serial is required");
+  return c.json({ output: await installApk(p.path, body.apk, { avd: avdOr400(body.avd) }) });
 });
+
+// ── Physical Android devices (scrcpy) ───────────────────────────────────────
+
+function serialOr400(serial: string) {
+  if (!SERIAL.test(serial)) throw new HttpError(400, "Invalid device serial");
+  return serial;
+}
+
+// What `adb devices` lists, apart from the SDK's emulators.
+app.get("/api/devices", async (c) => c.json(await deviceOverview()));
+
+// `{ "address": "192.168.1.20:37099" }` runs adb connect; with `"code": "123456"` it runs adb pair instead.
+app.post("/api/devices/connect", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { address?: unknown; code?: unknown };
+  if (typeof body.address !== "string") throw new HttpError(400, "address is required");
+  const code = typeof body.code === "string" && body.code.trim() ? body.code.trim() : undefined;
+  return c.json({ output: await connectDevice(body.address.trim(), code) });
+});
+
+app.post("/api/devices/:serial/disconnect", async (c) => {
+  await disconnectDevice(serialOr400(c.req.param("serial")));
+  return c.body(null, 204);
+});
+
+app.get("/api/devices/:serial/screenshot", async (c) => {
+  const serial = serialOr400(c.req.param("serial"));
+  const png = await deviceScreenshot(serial);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return c.body(new Uint8Array(png), 200, {
+    "content-type": "image/png",
+    "content-disposition": `attachment; filename="${serial.replace(/[^\w.-]/g, "_")}-${stamp}.png"`,
+  });
+});
+
+app.get("/api/devices/:serial/logcat", (c) => {
+  const stream = deviceLogcat(serialOr400(c.req.param("serial")));
+  return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" } });
+});
+
+// The screen through scrcpy: a JSON hello, then scrcpy's H.264 packets as binary messages (see openDeviceScreen).
+app.get(
+  "/api/devices/:serial/screen",
+  localOrigin,
+  async (c, next) => {
+    serialOr400(c.req.param("serial"));
+    await next();
+  },
+  upgradeWebSocket((c) => {
+    const serial = c.req.param("serial")!;
+    let screen: ReturnType<typeof openDeviceScreen> | undefined;
+    return {
+      onOpen(_evt, ws) {
+        try {
+          screen = openDeviceScreen(
+            serial,
+            (msg) => ws.send(msg),
+            (message) => {
+              ws.send(JSON.stringify({ error: message }));
+              ws.close(1011, "device stream ended");
+            },
+          );
+        } catch (err) {
+          ws.send(JSON.stringify({ error: (err as Error).message }));
+          ws.close(1011, "device unavailable");
+        }
+      },
+      onMessage(evt) {
+        if (typeof evt.data !== "string") return;
+        try {
+          screen?.input(JSON.parse(evt.data));
+        } catch {
+          // Ignore malformed input.
+        }
+      },
+      onClose() {
+        screen?.close();
+      },
+    };
+  }),
+);
 
 // ── Overview ────────────────────────────────────────────────────────────────
 

@@ -317,6 +317,27 @@ export interface EmulatorOverview {
   avds: EmulatorInfo[];
 }
 
+/** A physical device (or anything else adb sees that isn't one of the SDK's emulators), mirrored through scrcpy. */
+export interface DeviceInfo {
+  /** The adb serial: `R58M123ABC` over USB, `192.168.1.20:5555` or an mDNS name over Wi-Fi. */
+  serial: string;
+  /** adb's state: `device` when it's usable, else `unauthorized`, `offline`, `no permissions`… */
+  state: string;
+  /** The model, as adb reports it (`Pixel 8`), else the serial. */
+  name: string;
+  transport: "usb" | "wifi";
+  /** Whether it can be mirrored now (adb state `device`). */
+  ready: boolean;
+  /** What to do when it isn't ready. */
+  message?: string;
+}
+
+export interface DeviceOverview {
+  /** Set when adb is missing or failed. */
+  error?: string;
+  devices: DeviceInfo[];
+}
+
 /** What the Android tab needs to know about a project. */
 export interface AndroidProjectInfo {
   /** Has Gradle files or an AndroidManifest.xml. */
