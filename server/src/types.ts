@@ -292,6 +292,39 @@ export interface DevServerInfo extends DevServerStatus {
   scripts: Array<{ name: string; command: string }>;
 }
 
+export type EmulatorState = "stopped" | "starting" | "booting" | "running" | "stopping" | "crashed";
+
+/** One Android Virtual Device and, if it's running, the emulator instance for it. */
+export interface EmulatorInfo {
+  avd: string;
+  state: EmulatorState;
+  /** The adb serial (`emulator-5554`) while it runs. */
+  serial?: string;
+  pid?: number;
+  /** Whether the dashboard can show its screen: false when it runs without a gRPC token we can read (Android Studio). */
+  viewable: boolean;
+  /** Device screen size in pixels, portrait. */
+  screen?: { width: number; height: number };
+  /** Why it can't be shown, or why it crashed (the tail of its log). */
+  message?: string;
+}
+
+export interface EmulatorOverview {
+  /** The Android SDK folder, when one was found. */
+  sdk?: string;
+  /** Set when the SDK or its emulator is missing. */
+  error?: string;
+  avds: EmulatorInfo[];
+}
+
+/** What the Android tab needs to know about a project. */
+export interface AndroidProjectInfo {
+  /** Has Gradle files or an AndroidManifest.xml. */
+  isAndroid: boolean;
+  /** Built APKs under `<module>/build/outputs/apk`, newest first. Paths are relative to the project. */
+  apks: Array<{ path: string; size: number; modifiedAt: string }>;
+}
+
 export interface DevLogLine {
   seq: number;
   stream: "stdout" | "stderr" | "system";

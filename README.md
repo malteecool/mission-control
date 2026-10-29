@@ -120,6 +120,16 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
 - **Files** is a read-only browser for the project folder: expand folders in the tree and open a file to read it
   (Markdown renders, with a Source toggle; pictures preview; files over 512 KB show their start). Paths can't leave
   the project folder, symlinks and junctions included. The open file is in the URL, so you can link to it.
+- **Android** (shown on projects with Gradle files at the root or in `android/`, or an `AndroidManifest.xml`) runs
+  the Android SDK's emulator inside the page, the way Android Studio's Running Devices pane does. Pick one of your
+  virtual devices (AVDs) and **Start** it: the emulator runs without a window of its own (`-no-window -grpc <port>
+  -grpc-use-token`), and the tab shows its screen. Click to tap, drag to swipe, scroll to scroll, and type while it's
+  focused; the buttons below it are Back, Home, Recents, Rotate, Power and Screenshot. Logcat (via `adb logcat`) runs
+  alongside, with a filter. **Install APK** runs `adb install -r` with an APK from the project's
+  `<module>/build/outputs/apk` folders. Emulators keep running when the dashboard restarts and are found again from
+  the files they advertise themselves in. One started by Android Studio shows up as running but its screen can't be
+  shown, since it only accepts Android Studio's own tokens. Needs the SDK's emulator and platform tools (found through
+  `ANDROID_HOME`, `ANDROID_SDK_ROOT` or Android Studio's default location) and at least one AVD.
 - **Cost and usage:** when a dashboard run finishes, its reported cost and turns are stored in `dashboard.db`. The
   overview totals them per day, per project and per task, each project has a **Usage** tab, and task cards show
   what they've cost so far. Chat replies in a task's session count towards that task. Runs that are stopped

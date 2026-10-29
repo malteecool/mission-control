@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { Hono } from "hono";
-import { serve } from "@hono/node-server";
+import { serve, upgradeWebSocket } from "@hono/node-server";
+import { WebSocketServer } from "ws";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
   createProject,
@@ -57,6 +58,20 @@ import {
 } from "./lib/schedules.ts";
 import { usageReport } from "./lib/usage.ts";
 import { FileError, listDir, readFileContent, readImage } from "./lib/files.ts";
+import {
+  AVD_NAME,
+  EmulatorError,
+  androidProject,
+  emulatorOverview,
+  installApk,
+  logcatStream,
+  openScreen,
+  rotate,
+  screenshot,
+  startEmulator,
+  stopEmulator,
+  type ScreenInput,
+} from "./lib/emulator.ts";
 import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopAllDevServers, stopDevServer } from "./lib/devServers.ts";
 import type {
   ChatRequest,
@@ -113,7 +128,7 @@ class HttpError extends Error {
   }
 }
 app.onError((err, c) => {
-  if (err instanceof HttpError || err instanceof ReviewError || err instanceof FileError) return c.json({ error: err.message }, err.status);
+  if (err instanceof HttpError || err instanceof ReviewError || err instanceof FileError || err instanceof EmulatorError) return c.json({ error: err.message }, err.status);
   if (err instanceof SyntaxError) return c.json({ error: "Invalid JSON body" }, 400);
   console.error(err);
   return c.json({ error: err.message }, 500);
@@ -637,6 +652,101 @@ app.post("/api/runs/:runId/permission", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Android emulator ────────────────────────────────────────────────────────
+
+function avdOr400(name: string) {
+  if (!AVD_NAME.test(name)) throw new HttpError(400, "Invalid AVD name");
+  return name;
+}
+
+// The SDK, every AVD and the state of its emulator.
+app.get("/api/emulator", async (c) => c.json(await emulatorOverview()));
+
+app.post("/api/emulator/:avd/start", async (c) => c.json(await startEmulator(avdOr400(c.req.param("avd"))), 201));
+
+app.post("/api/emulator/:avd/stop", async (c) => c.json({ stopped: await stopEmulator(avdOr400(c.req.param("avd"))) }));
+
+app.post("/api/emulator/:avd/rotate", async (c) => {
+  await rotate(avdOr400(c.req.param("avd")));
+  return c.body(null, 204);
+});
+
+app.get("/api/emulator/:avd/screenshot", async (c) => {
+  const avd = avdOr400(c.req.param("avd"));
+  const png = await screenshot(avd);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return c.body(new Uint8Array(png), 200, {
+    "content-type": "image/png",
+    "content-disposition": `attachment; filename="${avd}-${stamp}.png"`,
+  });
+});
+
+// The emulator's logcat, as NDJSON.
+app.get("/api/emulator/:avd/logcat", (c) => {
+  const stream = logcatStream(avdOr400(c.req.param("avd")));
+  return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" } });
+});
+
+// The screen: binary frames out, JSON input (see ScreenInput) in. A WebSocket has no CORS, so any web page could
+// open one to localhost; the Origin check keeps it to our own UI (the Host check above blocks DNS rebinding).
+app.get(
+  "/api/emulator/:avd/screen",
+  async (c, next) => {
+    const origin = c.req.header("origin");
+    let host = "";
+    try {
+      host = origin ? new URL(origin).hostname : "";
+    } catch {
+      // Not a URL.
+    }
+    if (!["localhost", "127.0.0.1", "[::1]", "tauri.localhost"].includes(host)) return c.json({ error: "Forbidden origin" }, 403);
+    avdOr400(c.req.param("avd"));
+    await next();
+  },
+  upgradeWebSocket((c) => {
+    const avd = c.req.param("avd")!;
+    let screen: ReturnType<typeof openScreen> | undefined;
+    return {
+      onOpen(_evt, ws) {
+        try {
+          screen = openScreen(
+            avd,
+            (frame) => ws.send(frame),
+            (message) => {
+              ws.send(JSON.stringify({ error: message }));
+              ws.close(1011, "emulator stream ended");
+            },
+          );
+        } catch (err) {
+          ws.send(JSON.stringify({ error: (err as Error).message }));
+          ws.close(1011, "emulator unavailable");
+        }
+      },
+      onMessage(evt) {
+        if (typeof evt.data !== "string") return;
+        try {
+          screen?.input(JSON.parse(evt.data) as ScreenInput);
+        } catch {
+          // Ignore malformed input.
+        }
+      },
+      onClose() {
+        screen?.close();
+      },
+    };
+  }),
+);
+
+app.get("/api/projects/:id/android", (c) => c.json(androidProject(projectOr404(c.req.param("id")).path)));
+
+// `{ "apk": "app/build/outputs/apk/debug/app-debug.apk", "avd": "Pixel_10" }`: one of the APKs the route above lists.
+app.post("/api/projects/:id/android/install", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  const body = (await c.req.json().catch(() => ({}))) as { apk?: unknown; avd?: unknown };
+  if (typeof body.apk !== "string" || typeof body.avd !== "string") throw new HttpError(400, "apk and avd are required");
+  return c.json({ output: await installApk(p.path, body.apk, avdOr400(body.avd)) });
+});
+
 // ── Overview ────────────────────────────────────────────────────────────────
 
 // ── Usage ───────────────────────────────────────────────────────────────────
@@ -703,7 +813,7 @@ if (fs.existsSync(webDist)) {
   app.get("*", serveStatic({ path: path.join(root, "index.html"), onFound: (_, c) => c.header("Cache-Control", "no-cache") }));
 }
 
-serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" }, (info) => {
+serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1", websocket: { server: new WebSocketServer({ noServer: true }) } }, (info) => {
   console.log(`Project dashboard API on http://localhost:${info.port}`);
   startScheduler();
   void recoverReviewers();

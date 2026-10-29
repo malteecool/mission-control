@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { CheckSquare, CircleDollarSign, FolderTree, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, TerminalSquare, Trash2 } from "lucide-react";
+import { CheckSquare, CircleDollarSign, Smartphone, FolderTree, FolderX, GitBranch, History, MessageSquare, Pin, PinOff, Settings2, TerminalSquare, Trash2 } from "lucide-react";
 import { api, type PermissionMode } from "../lib/api.ts";
 import { href, navigate, type Route, type Tab } from "../lib/router.ts";
 import { activeRuns, useRuns } from "../lib/runs.ts";
@@ -14,6 +14,7 @@ import { HistoryPanel } from "./HistoryPanel.tsx";
 import { UsagePanel } from "./UsagePanel.tsx";
 import { DevPanel } from "./DevPanel.tsx";
 import { FilesPanel } from "./FilesPanel.tsx";
+import { EmulatorPanel } from "./EmulatorPanel.tsx";
 
 const COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#60a5fa", "#fb7185", "#2dd4bf"];
 
@@ -25,6 +26,8 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
   const [settingsOpen, setSettingsOpen] = useState(false);
   // For the Dev tab's badge; the Dev tab itself follows the server live and refreshes this.
   const dev = useQuery({ queryKey: ["dev", route.id], queryFn: () => api.devServer(route.id), refetchInterval: 15_000 });
+  // The Android tab only shows on Android projects (or when opened by its link).
+  const android = useQuery({ queryKey: ["android", route.id], queryFn: () => api.androidProject(route.id) });
 
   const update = useMutation({
     mutationFn: (body: Parameters<typeof api.updateProject>[1]) => api.updateProject(route.id, body),
@@ -65,6 +68,9 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
       icon: <TerminalSquare size={14} />,
       badge: dev.data?.status === "running" ? "on" : dev.data?.status === "crashed" ? "crashed" : undefined,
     },
+    ...(android.data?.isAndroid || route.tab === "android"
+      ? [{ id: "android" as const, label: "Android", icon: <Smartphone size={14} /> }]
+      : []),
     { id: "usage", label: "Usage", icon: <CircleDollarSign size={14} /> },
   ];
 
@@ -152,6 +158,7 @@ export function ProjectView({ route }: { route: Extract<Route, { name: "project"
         {p.exists && route.tab === "chat" && <ChatPanel projectId={p.id} />}
         {p.exists && route.tab === "files" && <FilesPanel projectId={p.id} filePath={route.filePath} />}
         {p.exists && route.tab === "dev" && <DevPanel projectId={p.id} />}
+        {p.exists && route.tab === "android" && <EmulatorPanel projectId={p.id} />}
         {route.tab === "history" && <HistoryPanel projectId={p.id} sessionId={route.sessionId} />}
         {route.tab === "usage" && (
           <div className="mx-auto max-w-5xl p-6">

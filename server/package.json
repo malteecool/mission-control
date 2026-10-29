@@ -8,11 +8,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.7",
+    "@grpc/proto-loader": "^0.8.1",
     "@hono/node-server": "^2.1.5",
-    "hono": "^4.13.14"
+    "hono": "^4.13.14",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

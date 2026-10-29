@@ -16,6 +16,9 @@ import type {
   DesktopStatus,
   DevServerInfo,
   DevServerStatus,
+  AndroidProjectInfo,
+  EmulatorInfo,
+  EmulatorOverview,
   DirListing,
   FileContent,
   Task,
@@ -115,6 +118,15 @@ export const api = {
   stopDevServer: (id: number) => request<{ stopped: boolean }>("POST", `/api/projects/${id}/dev/stop`),
   clearDevLogs: (id: number) => request<void>("DELETE", `/api/projects/${id}/dev/logs`),
   openDevPreview: (id: number) => request<void>("POST", `/api/projects/${id}/dev/open`),
+
+  emulators: () => request<EmulatorOverview>("GET", "/api/emulator"),
+  startEmulator: (avd: string) => request<EmulatorInfo>("POST", `/api/emulator/${encodeURIComponent(avd)}/start`),
+  stopEmulator: (avd: string) => request<{ stopped: boolean }>("POST", `/api/emulator/${encodeURIComponent(avd)}/stop`),
+  rotateEmulator: (avd: string) => request<void>("POST", `/api/emulator/${encodeURIComponent(avd)}/rotate`),
+  emulatorScreenshotUrl: (avd: string) => `/api/emulator/${encodeURIComponent(avd)}/screenshot`,
+  androidProject: (id: number) => request<AndroidProjectInfo>("GET", `/api/projects/${id}/android`),
+  installApk: (id: number, avd: string, apk: string) =>
+    request<{ output: string }>("POST", `/api/projects/${id}/android/install`, { avd, apk }),
 
   overview: () => request<Overview>("GET", "/api/overview"),
   health: () => request<ProjectHealth[]>("GET", "/api/health"),
