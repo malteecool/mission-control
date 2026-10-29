@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import clsx from "clsx";
 import { AlertTriangle, ChevronRight, Info, Sparkles, Terminal, User } from "lucide-react";
 import type { ChatItem } from "../lib/api.ts";
+import { Modal } from "./ui.tsx";
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
@@ -99,6 +100,7 @@ function ToolGroup({ tools, live }: { tools: Tool[]; live: boolean }) {
   const [open, setOpen] = useState(false);
   const errors = tools.filter((t) => t.isError).length;
   const names = [...new Set(tools.map((t) => t.name))].slice(0, 4).join(", ");
+  const images = tools.flatMap((t) => t.images ?? []);
   return (
     <div className="ml-9 rounded-xl border border-white/[0.07] bg-black/20">
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
@@ -113,6 +115,7 @@ function ToolGroup({ tools, live }: { tools: Tool[]; live: boolean }) {
       {!open && (
         <div className="px-3 pb-2 pl-9 font-mono text-[11px] text-slate-500">
           <span className="text-slate-400">{tools[tools.length - 1].name}</span> {tools[tools.length - 1].summary}
+          {images.length > 0 && <Thumbnails images={images.slice(-MAX_GROUP_THUMBS)} more={images.length - MAX_GROUP_THUMBS} />}
         </div>
       )}
       {open && (
@@ -139,6 +142,11 @@ function ToolRow({ tool: t }: { tool: Tool }) {
         <span className="shrink-0 text-[var(--accent)]">{t.name}</span>
         <span className="truncate text-slate-400">{t.summary}</span>
       </button>
+      {t.images && (
+        <div className="px-2 pb-2 pl-6">
+          <Thumbnails images={t.images} />
+        </div>
+      )}
       {open && (
         <div className="space-y-2 px-2 pb-2">
           <pre className="max-h-48 overflow-auto rounded-md bg-black/40 p-2 font-mono text-[11px] text-slate-400">
@@ -157,5 +165,31 @@ function ToolRow({ tool: t }: { tool: Tool }) {
         </div>
       )}
     </li>
+  );
+}
+
+/** How many of a collapsed tool group's images to show (the newest). */
+const MAX_GROUP_THUMBS = 6;
+
+/** Images a tool returned, e.g. the Android screenshots Claude took; click one to see it full size. */
+function Thumbnails({ images, more = 0 }: { images: string[]; more?: number }) {
+  const [shown, setShown] = useState<string | null>(null);
+  return (
+    <div className="mt-1.5 flex flex-wrap items-end gap-1.5">
+      {more > 0 && <span className="self-center text-[10px] text-slate-500">+{more} earlier</span>}
+      {images.map((src, i) => (
+        <button
+          key={i}
+          onClick={() => setShown(src)}
+          className="overflow-hidden rounded-md border border-white/10 bg-black/40 transition hover:border-white/30"
+          title="Show full size"
+        >
+          <img src={src} alt="Tool screenshot" loading="lazy" className="block max-h-40 max-w-[12rem] object-contain" />
+        </button>
+      ))}
+      <Modal open={shown !== null} onClose={() => setShown(null)} className="w-auto! max-w-[90vw]! p-2">
+        {shown && <img src={shown} alt="Tool screenshot" className="block max-h-[80vh] max-w-full rounded-lg object-contain" />}
+      </Modal>
+    </div>
   );
 }

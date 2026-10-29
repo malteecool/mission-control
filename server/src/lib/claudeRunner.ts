@@ -6,7 +6,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import type { ChatEvent, ClaudeInfo, PermissionMode, PermissionReply } from "../types.ts";
-import { toolResultText, toolSummary } from "./claudeSessions.ts";
+import { toolResultImages, toolResultText, toolSummary } from "./claudeSessions.ts";
 import { getSettings } from "./settings.ts";
 import { mcpLaunchArgs } from "./mcp.ts";
 
@@ -356,6 +356,7 @@ function normalise(e: any): ChatEvent[] {
           type: "tool_result" as const,
           toolUseId: b.tool_use_id,
           result: toolResultText(b.content),
+          images: toolResultImages(b.content),
           isError: !!b.is_error,
         }));
     }

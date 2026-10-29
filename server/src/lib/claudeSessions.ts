@@ -252,6 +252,28 @@ export function toolResultText(content: unknown): string {
   return text.length > 4000 ? text.slice(0, 4000) + "\n… (truncated)" : text;
 }
 
+const MAX_IMAGES_PER_RESULT = 4;
+const MAX_IMAGE_CHARS = 2_000_000; // base64, ~1.5 MB of image
+
+/** Image blocks of a tool result (e.g. android_screenshot) as data: URLs, skipping any too big to pass around. */
+export function toolResultImages(content: unknown): string[] | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const out: string[] = [];
+  for (const b of content) {
+    if (b?.type !== "image" || out.length >= MAX_IMAGES_PER_RESULT) continue;
+    // Claude's API shape ({ source: { media_type, data } }), or MCP's ({ mimeType, data }).
+    const mime = b.source?.media_type ?? b.mimeType;
+    const data = b.source?.data ?? b.data;
+    if (typeof mime !== "string" || !/^image\/[\w.+-]+$/.test(mime)) continue;
+    if (typeof data !== "string" || !data || data.length > MAX_IMAGE_CHARS) continue;
+    out.push(`data:${mime};base64,${data}`);
+  }
+  return out.length ? out : undefined;
+}
+
+/** Most images a loaded transcript carries (the newest); older ones keep just the "[image]" placeholder. */
+const MAX_TRANSCRIPT_IMAGES = 40;
+
 const MAX_ITEMS = 1500;
 
 export async function readTranscript(projectPath: string, sessionId: string): Promise<SessionTranscript | null> {
@@ -289,6 +311,7 @@ export async function readTranscript(projectPath: string, sessionId: string): Pr
           const tool = tools.get(b.tool_use_id);
           if (tool) {
             tool.result = toolResultText(b.content);
+            tool.images = toolResultImages(b.content);
             tool.isError = !!b.is_error;
           }
         }
@@ -316,10 +339,18 @@ export async function readTranscript(projectPath: string, sessionId: string): Pr
   }
 
   const truncated = items.length > MAX_ITEMS;
+  const kept = truncated ? items.slice(-MAX_ITEMS) : items;
+  let images = 0;
+  for (let i = kept.length - 1; i >= 0; i--) {
+    const it = kept[i];
+    if (it.kind !== "tool" || !it.images) continue;
+    if (images >= MAX_TRANSCRIPT_IMAGES) delete it.images;
+    else images += it.images.length;
+  }
   return {
     id: sessionId,
     title: oneLine(title ?? aiTitle ?? firstPrompt ?? "Untitled session", 100),
-    items: truncated ? items.slice(-MAX_ITEMS) : items,
+    items: kept,
     truncated,
   };
 }
