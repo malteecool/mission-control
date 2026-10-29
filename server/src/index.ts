@@ -72,6 +72,7 @@ import {
   stopEmulator,
   type ScreenInput,
 } from "./lib/emulator.ts";
+import { API_PORT, mcpPost } from "./lib/mcp.ts";
 import { SERIAL, connectDevice, deviceLogcat, deviceOverview, deviceScreenshot, disconnectDevice, openDeviceScreen } from "./lib/scrcpy.ts";
 import { clearDevLogs, devLogStream, devServerInfo, listDevServers, startDevServer, stopAllDevServers, stopDevServer } from "./lib/devServers.ts";
 import type {
@@ -86,8 +87,7 @@ import type {
   TaskStatus,
 } from "./types.ts";
 
-// Not plain PORT: dev tools often set that for the web app, which would make both servers fight over one port.
-const PORT = Number(process.env.DASHBOARD_API_PORT ?? 4317);
+const PORT = API_PORT;
 const app = new Hono();
 
 // This server can run Claude with file-write permissions, so only accept requests that clearly come from
@@ -891,6 +891,16 @@ app.get("/api/health", async (c) => {
 });
 
 // An API path with no route is a JSON 404, not the web app's index.html below (which the client can't parse).
+// ── MCP (tools for the Claude sessions the dashboard starts, see mcp.ts) ──────
+
+app.post("/api/mcp", async (c) => {
+  const res = await mcpPost(await c.req.json());
+  return res === undefined ? c.body(null, 202) : c.json(res);
+});
+
+// Stateless: no server-sent event stream to open and no session to end.
+app.on(["GET", "DELETE"], "/api/mcp", (c) => c.body(null, 405, { allow: "POST" }));
+
 app.all("/api/*", (c) => c.json({ error: `No API route for ${c.req.method} ${c.req.path}` }, 404));
 
 // ── Static web build (production) ───────────────────────────────────────────

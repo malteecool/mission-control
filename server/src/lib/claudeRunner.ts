@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { ChatEvent, ClaudeInfo, PermissionMode, PermissionReply } from "../types.ts";
 import { toolResultText, toolSummary } from "./claudeSessions.ts";
 import { getSettings } from "./settings.ts";
+import { mcpLaunchArgs } from "./mcp.ts";
 
 export { PERMISSION_MODES } from "./settings.ts";
 
@@ -165,6 +166,8 @@ export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: Chat
   ];
   if (opts.sessionId) args.push("--resume", opts.sessionId);
   if (opts.model) args.push("--model", opts.model);
+  // The dashboard's own tools (an Android screen to look at and tap); a read-only session doesn't get to tap.
+  if (!opts.readOnly) args.push(...mcpLaunchArgs());
 
   // Don't let the child think it is nested inside another Claude Code session.
   const env = { ...process.env };

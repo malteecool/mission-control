@@ -445,14 +445,7 @@ export function openScreen(avd: string, send: (frame: Uint8Array<ArrayBuffer>) =
   };
 
   const screen = () => screens.get(r.pid);
-  // Turns a spot on the frame as shown into device pixels: touches always use the portrait coordinates.
-  const toDevice = (x: number, y: number) => {
-    const size = screen();
-    if (!size) return undefined;
-    const [u, v] = [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
-    const [nx, ny] = rotation === 1 ? [1 - v, u] : rotation === 2 ? [1 - u, 1 - v] : rotation === 3 ? [v, 1 - u] : [u, v];
-    return { x: Math.round(nx * (size.width - 1)), y: Math.round(ny * (size.height - 1)) };
-  };
+  const toDevice = (x: number, y: number) => portraitPoint(screen(), rotation, x, y);
   const ignore = () => {};
   const sendEvent = (event: Record<string, unknown>) => {
     if (!events) {
@@ -508,9 +501,69 @@ export function openScreen(avd: string, send: (frame: Uint8Array<ArrayBuffer>) =
   };
 }
 
+/** Turns a spot (0–1) on a frame shown at `rotation` into device pixels: touches always use the portrait coordinates. */
+function portraitPoint(size: { width: number; height: number } | undefined, rotation: number, x: number, y: number) {
+  if (!size) return undefined;
+  const [u, v] = [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+  const [nx, ny] = rotation === 1 ? [1 - v, u] : rotation === 2 ? [1 - u, 1 - v] : rotation === 3 ? [v, 1 - u] : [u, v];
+  return { x: Math.round(nx * (size.width - 1)), y: Math.round(ny * (size.height - 1)) };
+}
+
 export async function screenshot(avd: string): Promise<Buffer> {
   const img = await call<Frame>(runningOr409(avd), "getScreenshot", { format: "PNG" }, 15_000);
   return img.image;
+}
+
+// ── For Claude sessions (mcp.ts) ───────────────────────────────────────────
+
+/** Running emulators: their adb serial, and whether the dashboard can drive them over gRPC (it started them). */
+export function runningEmulatorTargets(): Array<{ avd: string; serial: string; grpc: boolean }> {
+  return runningEmulators().map((r) => ({ avd: r.avd, serial: `emulator-${r.consolePort}`, grpc: !!(r.grpcPort && r.token) }));
+}
+
+/** A PNG of the screen as shown (rotated), scaled by the emulator to fit `maxWidth`×`maxHeight`. */
+export async function scaledScreenshot(avd: string, maxWidth: number, maxHeight: number) {
+  const r = runningOr409(avd);
+  if (!screens.has(r.pid)) await statusOf(r).catch(() => undefined);
+  const img = await call<Frame>(r, "getScreenshot", { format: "PNG", width: maxWidth, height: maxHeight }, 15_000);
+  const rotation = Math.max(0, ROTATIONS.indexOf(img.format.rotation?.rotation ?? "PORTRAIT"));
+  return { png: img.image, width: img.format.width, height: img.format.height, rotation };
+}
+
+/**
+ * Touches at spots (0–1 across a frame shown at `rotation`), `stepMs` apart, through one ordered input stream. The
+ * finger stays down until a point with `down: false`.
+ */
+export async function touchPath(avd: string, rotation: number, points: Array<{ x: number; y: number; down: boolean }>, stepMs: number) {
+  const r = runningOr409(avd);
+  if (!screens.has(r.pid)) await statusOf(r);
+  const size = screens.get(r.pid);
+  if (!size) throw new EmulatorError(409, `Couldn't read ${avd}'s screen size`);
+  await inputEvents(
+    r,
+    points.map((p) => ({ touch_event: { touches: [{ ...portraitPoint(size, rotation, p.x, p.y)!, identifier: 0, pressure: p.down ? 1 : 0 }] } })),
+    stepMs,
+  );
+}
+
+/** A key press (by the emulator's key name, e.g. `GoBack`, `Enter`) or typed text. */
+export async function keyInput(avd: string, input: { key: string } | { text: string }) {
+  await inputEvents(runningOr409(avd), [{ key_event: { eventType: "keypress", ...input } }], 0);
+}
+
+function inputEvents(r: Running & { grpcPort: number; token: string }, events: unknown[], stepMs: number): Promise<void> {
+  const { client, md } = controller(r);
+  return new Promise((resolve, reject) => {
+    const stream = client.streamInputEvent(md, (err: Error | null) => (err ? reject(err) : resolve())) as grpc.ClientWritableStream<unknown>;
+    let i = 0;
+    const next = () => {
+      if (i >= events.length) return stream.end();
+      stream.write(events[i++]);
+      if (stepMs > 0) setTimeout(next, stepMs);
+      else next();
+    };
+    next();
+  });
 }
 
 /** Turns the device a quarter turn, like the emulator window's rotate button. */
