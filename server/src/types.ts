@@ -402,6 +402,8 @@ export type ChatItem =
       summary: string;
       input: unknown;
       result?: string;
+      /** Images the tool returned (e.g. Android screenshots), as data: URLs. */
+      images?: string[];
       isError?: boolean;
       ts?: string;
     }
@@ -494,7 +496,7 @@ export type ChatEvent =
   | { type: "init"; sessionId: string; model?: string; cwd?: string }
   | { type: "delta"; text: string }
   | { type: "item"; item: ChatItem }
-  | { type: "tool_result"; toolUseId: string; result: string; isError: boolean }
+  | { type: "tool_result"; toolUseId: string; result: string; images?: string[]; isError: boolean }
   | {
       type: "done";
       sessionId?: string;

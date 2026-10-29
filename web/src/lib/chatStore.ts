@@ -242,7 +242,7 @@ function apply(projectId: number, ev: ChatEvent) {
     case "tool_result":
       return set(projectId, (s) => ({
         items: s.items.map((it) =>
-          it.kind === "tool" && it.id === ev.toolUseId ? { ...it, result: ev.result, isError: ev.isError } : it,
+          it.kind === "tool" && it.id === ev.toolUseId ? { ...it, result: ev.result, images: ev.images, isError: ev.isError } : it,
         ),
       }));
     case "done":
