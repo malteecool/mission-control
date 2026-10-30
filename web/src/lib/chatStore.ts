@@ -222,6 +222,27 @@ export const chat = {
   },
 };
 
+/** Most screenshots the chat keeps (the newest), like a transcript loaded from disk. */
+const MAX_IMAGES = 40;
+
+/** Drops images from the oldest tool calls past the cap, so a long live session doesn't pile up data: URLs. */
+function capImages(items: ChatItem[]): ChatItem[] {
+  let images = 0;
+  let out = items;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind !== "tool" || !it.images) continue;
+    if (images < MAX_IMAGES) {
+      images += it.images.length;
+      continue;
+    }
+    if (out === items) out = [...items];
+    const { images: _, ...rest } = it;
+    out[i] = rest;
+  }
+  return out;
+}
+
 function apply(projectId: number, ev: ChatEvent) {
   switch (ev.type) {
     case "run":
@@ -240,11 +261,12 @@ function apply(projectId: number, ev: ChatEvent) {
         draft: ev.item.kind === "assistant" ? "" : s.draft,
       }));
     case "tool_result":
-      return set(projectId, (s) => ({
-        items: s.items.map((it) =>
+      return set(projectId, (s) => {
+        const items = s.items.map((it) =>
           it.kind === "tool" && it.id === ev.toolUseId ? { ...it, result: ev.result, images: ev.images, isError: ev.isError } : it,
-        ),
-      }));
+        );
+        return { items: ev.images?.length ? capImages(items) : items };
+      });
     case "done":
       return set(projectId, (s) => ({
         sessionId: ev.sessionId ?? s.sessionId,

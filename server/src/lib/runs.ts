@@ -13,6 +13,8 @@ interface Run {
   /** Runs sharing a queue key run one at a time, in order (task runs share one per project). */
   queueKey?: string;
   events: ChatEvent[];
+  /** Images held by the stored `tool_result` events. */
+  images: number;
   listeners: Set<Listener>;
   stopRequested: boolean;
   hooks: RunHooks;
@@ -31,6 +33,8 @@ export interface RunHooks {
 const runs = new Map<string, Run>();
 const KEEP_FINISHED_MS = 15 * 60_000;
 const MAX_EVENTS = 5000;
+/** Most screenshots a run keeps for replay (the newest), like a transcript loaded from disk. */
+const MAX_IMAGES = 40;
 
 const isActive = (r: Run) => r.info.status === "queued" || r.info.status === "running";
 
@@ -60,6 +64,7 @@ export function createRun(opts: {
     launch: opts.launch,
     queueKey: opts.queueKey,
     events: [],
+    images: 0,
     listeners: new Set(),
     stopRequested: false,
     hooks: opts.hooks ?? {},
@@ -119,6 +124,17 @@ function emit(run: Run, ev: ChatEvent) {
 
   // Long runs stream a lot of text deltas; past the cap, keep only the events that matter for replay.
   if (ev.type !== "delta" || run.events.length < MAX_EVENTS) run.events.push(ev);
+  if (ev.type === "tool_result" && ev.images?.length) {
+    run.images += ev.images.length;
+    // Drop the oldest results' images so a long run doesn't hold (and replay) every screenshot it took.
+    for (let i = 0; run.images > MAX_IMAGES && i < run.events.length - 1; i++) {
+      const old = run.events[i];
+      if (old.type !== "tool_result" || !old.images) continue;
+      run.images -= old.images.length;
+      const { images: _, ...rest } = old;
+      run.events[i] = rest;
+    }
+  }
   for (const l of run.listeners) l(ev);
 }
 
