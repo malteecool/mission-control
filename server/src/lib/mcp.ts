@@ -1,5 +1,5 @@
-// An MCP server inside the dashboard, over MCP's Streamable HTTP transport (stateless: one JSON reply per POST, no
-// SSE), handed to every Claude session it starts through --mcp-config. Its tools let Claude see and drive an Android
+// An MCP server inside the dashboard, over MCP's Streamable HTTP transport (stateless: one reply per POST, a tool call's
+// as a short server-sent event stream so long builds stay alive, and no GET stream), handed to every Claude session it starts through --mcp-config. Its tools let Claude see and drive an Android
 // emulator or device (androidControl.ts), so it can try the app UI it just changed, and build and launch the app from
 // the session's folder (emulator.ts) with the same JDK and SDK the Android tab uses.
 import crypto from "node:crypto";
@@ -44,12 +44,21 @@ export function mcpLaunchArgs(cwd: string): string[] {
 
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
+/** What a tool call runs with. */
+interface Call {
+  /** The calling session's folder, if its config said (mcpLaunchArgs). */
+  cwd: string | undefined;
+  /** Aborted when the client goes away. */
+  signal: AbortSignal;
+  /** Tells the client how the call is getting on (a no-op unless it asked, with a progressToken). */
+  progress: (message: string) => void;
+}
+
 interface Tool {
   description: string;
   properties: Record<string, unknown>;
   required?: string[];
-  /** `cwd` is the calling session's folder, if its config said (mcpLaunchArgs). */
-  run: (args: Record<string, any>, cwd: string | undefined) => Promise<Content[] | string>;
+  run: (args: Record<string, any>, call: Call) => Promise<Content[] | string>;
 }
 
 const device = {
@@ -86,30 +95,44 @@ const TOOLS: Record<string, Tool> = {
       "installs the debug APK on the emulator or device and launches it, like the Android tab's Build & run. Returns the " +
       "result and the last lines of Gradle's output. Can take minutes; take a screenshot afterwards to see the app.",
     properties: { device },
-    async run(a, cwd) {
+    async run(a, { cwd, signal, progress }) {
       const dir = projectFolder(cwd);
       const t = await resolve(a.device);
+      if (signal.aborted) throw new EmulatorError(409, "The call was cancelled");
       const lines: string[] = [];
       let last: AndroidRunEvent | undefined;
       const reader = buildAndRunStream(dir, { serial: t.serial }).getReader();
+      // An abandoned call stops Gradle (the stream's cancel kills it) instead of building and installing anyway.
+      const stop = () => void reader.cancel().catch(() => {});
+      signal.addEventListener("abort", stop, { once: true });
       const decoder = new TextDecoder();
       let rest = "";
+      let told = 0;
       const take = (line: string) => {
         if (!line.trim()) return;
         const ev = JSON.parse(line) as AndroidRunEvent;
         if ("text" in ev) {
           lines.push(ev.text);
           if (lines.length > BUILD_LINES) lines.shift();
+          if (ev.text.trim() && Date.now() - told >= PROGRESS_MS) {
+            told = Date.now();
+            progress(ev.text);
+          }
         } else last = ev;
       };
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const parts = (rest + decoder.decode(value, { stream: true })).split("\n");
-        rest = parts.pop() ?? "";
-        parts.forEach(take);
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const parts = (rest + decoder.decode(value, { stream: true })).split("\n");
+          rest = parts.pop() ?? "";
+          parts.forEach(take);
+        }
+        take(rest + decoder.decode());
+      } finally {
+        signal.removeEventListener("abort", stop);
       }
-      take(rest + decoder.decode());
+      if (signal.aborted) throw new EmulatorError(409, "The call was cancelled, so the build was stopped");
       const output = `Last ${lines.length} lines of output:\n${lines.join("\n")}`;
       const on = t.avd ?? t.serial;
       if (last && "done" in last) return `Built ${last.apk}, installed it on ${on} and launched ${last.package}.\n\n${output}`;
@@ -199,6 +222,8 @@ const clampMs = (v: unknown, fallback: number) => (typeof v === "number" && v > 
 
 /** How much of Gradle's output android_build_and_run returns. */
 const BUILD_LINES = 100;
+/** How often at most android_build_and_run reports progress (Gradle's latest line). */
+const PROGRESS_MS = 5_000;
 
 /**
  * The session's folder, if it's one of the dashboard's projects or a task worktree of one (<project>/.claude/worktrees/*):
@@ -237,7 +262,7 @@ const instructions =
   "android_build_and_run builds, installs and launches your changed app (it sets up the JDK and Android SDK, so don't " +
   "run Gradle's installDebug yourself), then take a screenshot.";
 
-async function handle(req: Request, cwd: string | undefined): Promise<unknown> {
+async function handle(req: Request, call: Call): Promise<unknown> {
   switch (req.method) {
     case "initialize": {
       const asked = req.params?.protocolVersion;
@@ -263,7 +288,7 @@ async function handle(req: Request, cwd: string | undefined): Promise<unknown> {
       const tool = TOOLS[req.params?.name];
       if (!tool) throw new RpcError(-32602, `Unknown tool ${req.params?.name}`);
       try {
-        const out = await tool.run(req.params?.arguments ?? {}, cwd);
+        const out = await tool.run(req.params?.arguments ?? {}, call);
         return { content: typeof out === "string" ? [{ type: "text", text: out }] : out };
       } catch (err) {
         // Tool failures go back to Claude as results it can act on, not as protocol errors.
@@ -285,25 +310,88 @@ class RpcError extends Error {
   }
 }
 
-async function reply(req: Request, cwd: string | undefined) {
+async function reply(req: Request, call: Call) {
   try {
-    return { jsonrpc: "2.0", id: req.id, result: await handle(req, cwd) };
+    return { jsonrpc: "2.0", id: req.id, result: await handle(req, call) };
   } catch (err) {
     return { jsonrpc: "2.0", id: req.id, error: { code: err instanceof RpcError ? err.code : -32603, message: (err as Error).message } };
   }
 }
 
+/** How often a tool call's event stream sends something while the tool works. */
+const KEEPALIVE_MS = 15_000;
+
 /**
- * Handles a POST body: one message or a batch, from a session working in `cwd`. Undefined when there's nothing to
- * answer (replied to with 202).
+ * A tool call's reply as a server-sent event stream: the headers at once, then a comment every 15s and progress
+ * notifications while the tool works, then the result. A JSON reply would send nothing until the tool is done, and
+ * clients give up on a quiet request after a while (Node's fetch after 5 minutes), which a cold Gradle build can take.
  */
-export async function mcpPost(body: unknown, cwd?: string): Promise<unknown> {
+function streamReply(req: Request, cwd: string | undefined, signal: AbortSignal): Response {
+  const enc = new TextEncoder();
+  const abort = new AbortController();
+  const gone = () => abort.abort();
+  signal.addEventListener("abort", gone, { once: true });
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const write = (text: string) => {
+        if (abort.signal.aborted) return;
+        try {
+          controller.enqueue(enc.encode(text));
+        } catch {
+          // Client went away; cancel() aborts the call.
+        }
+      };
+      const send = (message: unknown) => write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
+      const token = req.params?._meta?.progressToken;
+      let n = 0;
+      const progress = (message: string) => {
+        if (token !== undefined) send({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token, progress: ++n, message } });
+      };
+      // Something right away, so the headers go out now.
+      write(": started\n\n");
+      timer = setInterval(() => write(": working\n\n"), KEEPALIVE_MS);
+      try {
+        send(await reply(req, { cwd, signal: abort.signal, progress }));
+      } finally {
+        clearInterval(timer);
+        signal.removeEventListener("abort", gone);
+        try {
+          controller.close();
+        } catch {
+          // Already cancelled.
+        }
+      }
+    },
+    cancel() {
+      clearInterval(timer);
+      abort.abort();
+    },
+  });
+  return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+}
+
+interface Post {
+  /** The calling session's folder, from the URL (mcpLaunchArgs). */
+  cwd?: string;
+  /** The request's, aborted when the client goes away. */
+  signal: AbortSignal;
+  /** The request's Accept header. */
+  accept?: string;
+}
+
+/** Handles a POST body: one message or a batch, from a session working in `cwd`. */
+export async function mcpPost(body: unknown, { cwd, signal, accept }: Post): Promise<Response> {
   const messages = Array.isArray(body) ? body : [body];
   if (!messages.length || !messages.every((m) => m && typeof m === "object"))
-    return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request" } };
+    return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request" } });
   // Notifications (no id) and responses (no method; we send no requests) need no answer.
   const requests = messages.filter((m): m is Request => typeof m.method === "string" && m.id !== undefined);
-  if (!requests.length) return undefined;
-  const replies = await Promise.all(requests.map((r) => reply(r, cwd)));
-  return Array.isArray(body) ? replies : replies[0];
+  if (!requests.length) return new Response(null, { status: 202 });
+  // Tool calls can take minutes, so they're answered as a stream (when the client takes one, as it has to).
+  if (!Array.isArray(body) && requests[0].method === "tools/call" && accept?.includes("text/event-stream"))
+    return streamReply(requests[0], cwd, signal);
+  const call: Call = { cwd, signal, progress: () => {} };
+  const replies = await Promise.all(requests.map((r) => reply(r, call)));
+  return Response.json(Array.isArray(body) ? replies : replies[0]);
 }

@@ -907,10 +907,9 @@ app.get("/api/health", async (c) => {
 // An API path with no route is a JSON 404, not the web app's index.html below (which the client can't parse).
 // ── MCP (tools for the Claude sessions the dashboard starts, see mcp.ts) ──────
 
-app.post("/api/mcp", async (c) => {
-  const res = await mcpPost(await c.req.json(), c.req.query("cwd"));
-  return res === undefined ? c.body(null, 202) : c.json(res);
-});
+app.post("/api/mcp", async (c) =>
+  mcpPost(await c.req.json(), { cwd: c.req.query("cwd"), signal: c.req.raw.signal, accept: c.req.header("accept") }),
+);
 
 // Stateless: no server-sent event stream to open and no session to end.
 app.on(["GET", "DELETE"], "/api/mcp", (c) => c.body(null, 405, { allow: "POST" }));

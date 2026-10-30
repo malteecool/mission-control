@@ -196,11 +196,18 @@ interface Connection {
   md: () => grpc.Metadata;
 }
 const clients = new Map<string, Connection>();
+/**
+ * Studio emulators (by pid) that never loaded our key. Remembered so polls answer at once instead of waiting for the key
+ * again each time; dropped once the emulator is gone.
+ */
+const keyFailures = new Map<number, string>();
 
 function controller(r: Reachable): Connection {
   const key = `${r.pid}:${r.grpcPort}`;
   let c = clients.get(key);
   if (c) return c;
+  const failed = keyFailures.get(r.pid);
+  if (failed) throw new EmulatorError(409, failed);
   if (!ctor) {
     const lib = path.join(sdkOr409(), "emulator", "lib");
     const def = protoLoader.loadSync(path.join(lib, "emulator_controller.proto"), {
@@ -225,11 +232,12 @@ function controller(r: Reachable): Connection {
     c = { client, ready: Promise.resolve(), md: () => md };
   } else {
     const ready = registerKey(r.jwks!);
-    // Try again next time rather than keeping a connection that can't authorize.
-    ready.catch(() => {
+    // Drop a connection that can't authorize, and don't wait for the key again while this emulator runs.
+    ready.catch((e: Error) => {
       if (clients.get(key) !== c) return;
       clients.delete(key);
       client.close();
+      keyFailures.set(r.pid, e.message);
     });
     c = { client, ready, md: () => bearer(jwt()) };
   }
@@ -247,14 +255,26 @@ async function call<T>(r: Reachable, method: string, req: unknown, timeoutMs = 5
 
 // ── JWT (emulators started by Android Studio) ───────────────────────────────
 
-/** This process's signing key, made on first use. The emulator gets its public half as a JWK. */
+/**
+ * The dashboard's signing key, kept in the data folder so its key ID (and the JWK file each emulator gets) stays the
+ * same across restarts. The emulator gets its public half as a JWK.
+ */
 let signer: { kid: string; privateKey: crypto.KeyObject; jwk: object } | undefined;
 let token: { jwt: string; exp: number } | undefined;
+const keyFile = path.join(dataDir, "emulator-jwt-key.pem");
 
 function signingKey() {
   if (!signer) {
-    const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
-    const kid = crypto.randomUUID();
+    let privateKey: crypto.KeyObject;
+    try {
+      privateKey = crypto.createPrivateKey(fs.readFileSync(keyFile, "utf8"));
+    } catch {
+      privateKey = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey;
+      fs.writeFileSync(keyFile, privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600 });
+    }
+    const publicKey = crypto.createPublicKey(privateKey);
+    // Derived from the key itself, so it only changes if the key does.
+    const kid = crypto.createHash("sha256").update(publicKey.export({ format: "der", type: "spki" })).digest("hex").slice(0, 32);
     signer = { kid, privateKey, jwk: { ...publicKey.export({ format: "jwk" }), kid, alg: "ES256", use: "sig" } };
   }
   return signer;
@@ -273,8 +293,16 @@ async function registerKey(jwks: { dir: string; active: string }) {
       return false; // Missing or mid-write.
     }
   };
+  const ours = `dashboard-${kid}.jwk`;
+  // Earlier dashboards made a new key ID per run; clear out their leftovers.
+  try {
+    for (const f of fs.readdirSync(jwks.dir))
+      if (f !== ours && /^dashboard-.+\.jwk$/.test(f)) fs.rmSync(path.join(jwks.dir, f), { force: true });
+  } catch {
+    // Not there yet, or a file in use: harmless.
+  }
   if (loaded()) return;
-  fs.writeFileSync(path.join(jwks.dir, `dashboard-${kid}.jwk`), JSON.stringify({ keys: [jwk] }));
+  fs.writeFileSync(path.join(jwks.dir, ours), JSON.stringify({ keys: [jwk] }));
   for (let i = 0; i < 50; i++) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     if (loaded()) return;
@@ -298,7 +326,7 @@ function jwt(): string {
   return token.jwt;
 }
 
-/** Drops clients for emulators that are gone. */
+/** Drops clients, and remembered key failures, for emulators that are gone. */
 function pruneClients(running: Running[]) {
   const live = new Set(running.map((r) => `${r.pid}:${r.grpcPort}`));
   for (const [key, c] of clients) {
@@ -306,6 +334,8 @@ function pruneClients(running: Running[]) {
     c.client.close();
     clients.delete(key);
   }
+  const pids = new Set(running.map((r) => r.pid));
+  for (const pid of keyFailures.keys()) if (!pids.has(pid)) keyFailures.delete(pid);
 }
 
 interface Status {
@@ -665,10 +695,17 @@ export async function keyInput(avd: string, input: { key: string } | { text: str
 async function inputEvents(r: Reachable, events: unknown[], stepMs: number): Promise<void> {
   const { client, ready, md } = controller(r);
   await ready;
+  // A hung emulator would otherwise never answer, stalling the tool call: give the stream its pacing plus 10s.
+  const deadline = Date.now() + events.length * stepMs + 10_000;
   return new Promise((resolve, reject) => {
-    const stream = client.streamInputEvent(md(), (err: Error | null) => (err ? reject(err) : resolve())) as grpc.ClientWritableStream<unknown>;
+    let done = false;
+    const stream = client.streamInputEvent(md(), { deadline }, (err: Error | null) => {
+      done = true;
+      err ? reject(err) : resolve();
+    }) as grpc.ClientWritableStream<unknown>;
     let i = 0;
     const next = () => {
+      if (done) return;
       if (i >= events.length) return stream.end();
       stream.write(events[i++]);
       if (stepMs > 0) setTimeout(next, stepMs);
@@ -947,6 +984,7 @@ export function buildAndRunStream(dir: string, target: Target): ReadableStream<U
         const file = path.join(dir, apk);
         const pkg = await packageOf(file);
         if (!pkg) throw new Error(`Couldn't tell which package ${apk} installs`);
+        if (cancelled) return;
 
         say(`> adb -s ${serial} install -r -t ${apk}`);
         say(await adbInstall(adb, serial, file));
