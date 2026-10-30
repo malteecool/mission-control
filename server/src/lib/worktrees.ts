@@ -103,8 +103,12 @@ export async function commitWorktree(wt: TaskWorktree, message: string): Promise
 export async function removeWorktree(project: Project, wt: TaskWorktree, opts: { deleteBranch?: boolean } = {}) {
   const repo = await repoFor(project.path);
   if (!repo) throw new Error(`Not a git repository: ${project.path}`);
-  if (fs.existsSync(wt.root)) await mustGit(repo.root, ["worktree", "remove", "--force", wt.root], { timeout: 120_000 });
-  else await git(repo.root, ["worktree", "prune"]);
+  // A folder git no longer knows as a worktree (say an earlier removal was cut short by a locked file) is just leftovers.
+  if (fs.existsSync(path.join(wt.root, ".git"))) await mustGit(repo.root, ["worktree", "remove", "--force", wt.root], { timeout: 120_000 });
+  else {
+    await git(repo.root, ["worktree", "prune"]);
+    await fs.promises.rm(wt.root, { recursive: true, force: true, maxRetries: 3 }).catch((err) => console.error("Removing leftover worktree folder:", err));
+  }
   if (opts.deleteBranch) await git(repo.root, ["branch", "-D", wt.branch]);
 }
 

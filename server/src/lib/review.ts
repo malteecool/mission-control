@@ -5,11 +5,13 @@
 // worktree (worktrees.ts) is snapshotted there instead, and reviewing it ends in Merge (its branch into yours),
 // Open PR (push the branch and open a pull request with the gh CLI) or Discard.
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChangeSummary, ChangedFile, Project, Task, TaskChanges, TaskPullRequest, TaskReview } from "../types.ts";
 import { gh, git, mustGit, repoFor, type Repo } from "./git.ts";
+import { activeReviewerRun, activeRunForTask } from "./runs.ts";
 import { TASK_FILE, getTask, readTasks, updateTask } from "./tasks.ts";
 import { commitWorktree, importFollowUps, removeWorktree } from "./worktrees.ts";
 
@@ -161,8 +163,9 @@ async function objectsExist(root: string, ...ids: string[]): Promise<boolean> {
 }
 
 export async function taskChanges(project: Project, taskId: string): Promise<TaskChanges> {
-  const task = await getTask(project.path, taskId);
+  let task = await getTask(project.path, taskId);
   if (!task) throw new ReviewError(404, "Task not found");
+  if ((await settleLanded(project, [task])).size) task = (await getTask(project.path, taskId)) ?? task;
   const r = await resolve(project, task);
   const branches = task.worktree
     ? { branch: task.worktree.branch, into: await currentBranch(project.path), ...(await remoteInfo(project.path)) }
@@ -200,9 +203,50 @@ async function currentBranch(projectPath: string): Promise<string | undefined> {
   return (r.ok && r.stdout.trim()) || undefined;
 }
 
+/**
+ * Whether a worktree task's branch has already landed in the branch your checkout is on some other way (merged by
+ * hand or by another session, or a PR merged and pulled) with nothing left over in its worktree. Branches without
+ * commits of their own don't count: they're trivially "merged" while the task hasn't done anything yet.
+ */
+async function landedElsewhere(project: Project, task: Task): Promise<boolean> {
+  const wt = task.worktree;
+  if (!wt || activeRunForTask(task.id) || activeReviewerRun(task.id)) return false;
+  const main = await repoFor(project.path);
+  if (!main) return false;
+  const tip = await git(main.root, ["rev-parse", "-q", "--verify", `refs/heads/${wt.branch}^{commit}`]);
+  if (!tip.ok) return false;
+  const commit = tip.stdout.trim();
+  if (commit === wt.base || !(await git(main.root, ["merge-base", "--is-ancestor", commit, "HEAD"])).ok) return false;
+  if (fsSync.existsSync(path.join(wt.root, ".git"))) {
+    const repo = await repoFor(wt.path);
+    if (!repo) return false;
+    const status = await git(wt.root, ["status", "--porcelain", "-z", ...pathspec(repo)]);
+    if (!status.ok || status.stdout.trim()) return false;
+  }
+  return true;
+}
+
+/** Drops the worktree, branch and review of tasks whose branch was merged outside the dashboard. */
+async function settleLanded(project: Project, tasks: Task[]): Promise<Set<string>> {
+  const settled = new Set<string>();
+  for (const t of tasks) {
+    if (!t.worktree) continue;
+    await withLock(`merge:${project.id}`, async () => {
+      const task = await getTask(project.path, t.id);
+      if (!task?.worktree || !(await landedElsewhere(project, task))) return;
+      await removeWorktree(project, task.worktree, { deleteBranch: true }).catch((err) => console.error("Removing worktree:", err));
+      await updateTask(project.path, task.id, { worktree: undefined, review: undefined });
+      settled.add(task.id);
+    });
+  }
+  return settled;
+}
+
 /** File counts for every task on the board that has changes to review. */
 export async function changeSummaries(project: Project): Promise<ChangeSummary[]> {
-  const tasks = (await readTasks(project.path)).filter((t) => t.review);
+  const all = (await readTasks(project.path)).filter((t) => t.review);
+  const settled = await settleLanded(project, all);
+  const tasks = all.filter((t) => !settled.has(t.id));
   if (!tasks.length) return [];
   // The main checkout plus each task's worktree; a "now" snapshot is taken at most once per checkout.
   const repos = new Map<string, Promise<Repo | null>>();
