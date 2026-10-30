@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Project, Task, TaskWorktree } from "../types.ts";
 import { git, mustGit, repoFor, type Repo } from "./git.ts";
+import { removeNativeBuilds } from "./emulator.ts";
 import { TASK_FILE, addTasks, readTasks } from "./tasks.ts";
 
 const WORKTREES = path.join(".claude", "worktrees");
@@ -104,8 +105,11 @@ export async function removeWorktree(project: Project, wt: TaskWorktree, opts: {
   const repo = await repoFor(project.path);
   if (!repo) throw new Error(`Not a git repository: ${project.path}`);
   // A folder git no longer knows as a worktree (say an earlier removal was cut short by a locked file) is just leftovers.
-  if (fs.existsSync(path.join(wt.root, ".git"))) await mustGit(repo.root, ["worktree", "remove", "--force", wt.root], { timeout: 120_000 });
-  else {
+  await removeNativeBuilds(wt.path);
+  // core.longpaths: a worktree's node_modules and build outputs go past 260 characters, which git on Windows won't delete otherwise.
+  if (fs.existsSync(path.join(wt.root, ".git"))) {
+    await mustGit(repo.root, ["-c", "core.longpaths=true", "worktree", "remove", "--force", wt.root], { timeout: 120_000 });
+  } else {
     await git(repo.root, ["worktree", "prune"]);
     await fs.promises.rm(wt.root, { recursive: true, force: true, maxRetries: 3 }).catch((err) => console.error("Removing leftover worktree folder:", err));
   }
