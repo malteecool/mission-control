@@ -62,6 +62,7 @@ import {
   AVD_NAME,
   EmulatorError,
   androidProject,
+  buildAndRunStream,
   emulatorOverview,
   installApk,
   logcatStream,
@@ -755,6 +756,19 @@ app.post("/api/projects/:id/android/install", async (c) => {
   if (typeof body.serial === "string") return c.json({ output: await installApk(p.path, body.apk, { serial: serialOr400(body.serial) }) });
   if (typeof body.avd !== "string") throw new HttpError(400, "avd or serial is required");
   return c.json({ output: await installApk(p.path, body.apk, { avd: avdOr400(body.avd) }) });
+});
+
+// `{ "avd": "Pixel_10" }` or `{ "serial": "..." }`: gradlew assembleDebug, install the debug APK and launch it, as NDJSON
+// AndroidRunEvents. Closing the request stops the build.
+app.post("/api/projects/:id/android/run", async (c) => {
+  const p = projectOr404(c.req.param("id"));
+  const body = (await c.req.json().catch(() => ({}))) as { avd?: unknown; serial?: unknown };
+  let target: { avd: string } | { serial: string };
+  if (typeof body.serial === "string") target = { serial: serialOr400(body.serial) };
+  else if (typeof body.avd === "string") target = { avd: avdOr400(body.avd) };
+  else throw new HttpError(400, "avd or serial is required");
+  const stream = buildAndRunStream(p.path, target);
+  return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" } });
 });
 
 // ── Physical Android devices (scrcpy) ───────────────────────────────────────

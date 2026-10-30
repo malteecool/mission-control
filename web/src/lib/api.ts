@@ -17,6 +17,7 @@ import type {
   DevServerInfo,
   DevServerStatus,
   AndroidProjectInfo,
+  AndroidRunEvent,
   EmulatorInfo,
   EmulatorOverview,
   DeviceOverview,
@@ -128,6 +129,29 @@ export const api = {
   androidProject: (id: number) => request<AndroidProjectInfo>("GET", `/api/projects/${id}/android`),
   installApk: (id: number, target: { avd: string } | { serial: string }, apk: string) =>
     request<{ output: string }>("POST", `/api/projects/${id}/android/install`, { ...target, apk }),
+  /** Builds, installs and launches the app, calling `onEvent` for each line of output; aborting `signal` stops the build. */
+  buildAndRun: async (id: number, target: { avd: string } | { serial: string }, signal: AbortSignal, onEvent: (ev: AndroidRunEvent) => void) => {
+    const res = await fetch(`/api/projects/${id}/android/run`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "content-type": "application/json", "x-dashboard": "1" },
+      body: JSON.stringify(target),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new ApiError(err.error ?? `Request failed (${res.status})`);
+    }
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let rest = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const parts = (rest + value).split("\n");
+      rest = parts.pop() ?? "";
+      for (const part of parts) if (part.trim()) onEvent(JSON.parse(part) as AndroidRunEvent);
+    }
+  },
   devices: () => request<DeviceOverview>("GET", "/api/devices"),
   connectDevice: (address: string, code?: string) => request<{ output: string }>("POST", "/api/devices/connect", { address, code }),
   disconnectDevice: (serial: string) => request<void>("POST", `/api/devices/${encodeURIComponent(serial)}/disconnect`),

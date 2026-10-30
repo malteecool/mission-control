@@ -344,7 +344,15 @@ export interface AndroidProjectInfo {
   isAndroid: boolean;
   /** Built APKs under `<module>/build/outputs/apk`, newest first. Paths are relative to the project. */
   apks: Array<{ path: string; size: number; modifiedAt: string }>;
+  /** The Gradle wrapper that builds it (`gradlew`, or `android/gradlew` for React Native, Expo and Flutter apps). */
+  gradlew?: string;
 }
+
+/** A line of `POST /api/projects/:id/android/run`'s NDJSON stream; the last one has `done` or `error`. */
+export type AndroidRunEvent =
+  | { text: string; stream: "stdout" | "stderr" | "system" }
+  | { done: true; apk: string; package: string }
+  | { error: string };
 
 export interface DevLogLine {
   seq: number;

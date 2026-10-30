@@ -15,7 +15,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { dataDir } from "../db.ts";
-import type { AndroidProjectInfo, EmulatorInfo, EmulatorOverview } from "../types.ts";
+import type { AndroidProjectInfo, AndroidRunEvent, EmulatorInfo, EmulatorOverview } from "../types.ts";
 
 export const AVD_NAME = /^[\w.-]+$/;
 const logDir = path.join(dataDir, "emulators");
@@ -797,20 +797,182 @@ export function androidProject(dir: string): AndroidProjectInfo {
 
   const manifest = has("AndroidManifest.xml") || has("app", "src", "main", "AndroidManifest.xml");
   apks.sort((a, b) => b.mtime - a.mtime);
-  return { isAndroid: gradle || manifest || apks.length > 0, apks: apks.map(({ mtime: _, ...a }) => a) };
+  const wrapper = gradleDir(dir);
+  return {
+    isAndroid: gradle || manifest || apks.length > 0,
+    apks: apks.map(({ mtime: _, ...a }) => a),
+    gradlew: wrapper === undefined ? undefined : path.posix.join(wrapper, "gradlew"),
+  };
 }
 
-/** Installs one of the project's APKs on an emulator (by AVD) or a device (by adb serial). */
-export async function installApk(dir: string, apk: string, target: { avd: string } | { serial: string }): Promise<string> {
-  if (!androidProject(dir).apks.some((a) => a.path === apk)) throw new EmulatorError(404, `No built APK at ${apk}`);
-  let serial: string;
-  if ("avd" in target) {
-    const r = runningEmulators().find((r) => r.avd === target.avd);
-    if (!r) throw new EmulatorError(409, `${target.avd} isn't running`);
-    serial = `emulator-${r.consolePort}`;
-  } else serial = target.serial;
-  const res = await run(adbOr409(), ["-s", serial, "install", "-r", "-t", path.join(dir, apk)], 180_000);
+type Target = { avd: string } | { serial: string };
+
+function serialFor(target: Target): string {
+  if (!("avd" in target)) return target.serial;
+  const r = runningEmulators().find((r) => r.avd === target.avd);
+  if (!r) throw new EmulatorError(409, `${target.avd} isn't running`);
+  return `emulator-${r.consolePort}`;
+}
+
+async function adbInstall(adb: string, serial: string, file: string): Promise<string> {
+  const res = await run(adb, ["-s", serial, "install", "-r", "-t", file], 180_000);
   const out = (res.stdout + res.stderr).trim();
   if (res.code !== 0 || !/Success/.test(out)) throw new Error(out || "adb install failed");
   return out;
+}
+
+/** Installs one of the project's APKs on an emulator (by AVD) or a device (by adb serial). */
+export async function installApk(dir: string, apk: string, target: Target): Promise<string> {
+  if (!androidProject(dir).apks.some((a) => a.path === apk)) throw new EmulatorError(404, `No built APK at ${apk}`);
+  return adbInstall(adbOr409(), serialFor(target), path.join(dir, apk));
+}
+
+// ── Build & run ─────────────────────────────────────────────────────────────
+
+/** Where the Gradle wrapper is, relative to the project ("" or "android"). */
+function gradleDir(dir: string): string | undefined {
+  return ["", "android"].find((d) => ["gradlew", "gradlew.bat"].some((f) => fs.existsSync(path.join(dir, d, f))));
+}
+
+/** The JDK bundled with Android Studio, which is what Studio builds with unless told otherwise. */
+function studioJdk(): string | undefined {
+  const home = os.homedir();
+  const candidates =
+    process.platform === "win32"
+      ? [process.env.ProgramFiles, process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs")]
+          .filter((d): d is string => !!d)
+          .map((d) => path.join(d, "Android", "Android Studio", "jbr"))
+      : process.platform === "darwin"
+        ? ["/Applications/Android Studio.app/Contents/jbr/Contents/Home", path.join(home, "Applications", "Android Studio.app", "Contents", "jbr", "Contents", "Home")]
+        : ["/opt/android-studio/jbr", path.join(home, "android-studio", "jbr"), "/snap/android-studio/current/jbr"];
+  return candidates.find((c) => fs.existsSync(path.join(c, "bin", exe("java"))));
+}
+
+/** The package an APK installs: from the output-metadata.json Gradle writes beside it, else from aapt2. */
+async function packageOf(apkFile: string): Promise<string | undefined> {
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(path.dirname(apkFile), "output-metadata.json"), "utf8")) as { applicationId?: unknown };
+    if (typeof meta.applicationId === "string" && meta.applicationId) return meta.applicationId;
+  } catch {
+    // Older Android Gradle Plugin, or not written by Gradle.
+  }
+  const sdk = sdkCandidates().find((c) => fs.existsSync(path.join(c, "build-tools")));
+  if (!sdk) return undefined;
+  const versions = fs.readdirSync(path.join(sdk, "build-tools")).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  const aapt2 = versions.map((v) => path.join(sdk, "build-tools", v, exe("aapt2"))).find((p) => fs.existsSync(p));
+  if (!aapt2) return undefined;
+  const res = await run(aapt2, ["dump", "packagename", apkFile]);
+  return res.code === 0 ? res.stdout.trim() || undefined : undefined;
+}
+
+/**
+ * The debug APK assembleDebug made: one written by this build if any (an up-to-date build leaves the old one), in the
+ * `app` module if there are several, preferring a universal APK over ABI splits.
+ */
+function debugApk(dir: string, since: number): string | undefined {
+  const debug = androidProject(dir).apks.filter((a) => /\/outputs\/apk\/(?:[^/]+\/)?debug\/[^/]+$/.test(a.path));
+  const fresh = debug.filter((a) => Date.parse(a.modifiedAt) >= since - 2000);
+  const pool = fresh.length ? fresh : debug;
+  const inApp = pool.filter((a) => /^(?:android\/)?app\//.test(a.path));
+  const picks = inApp.length ? inApp : pool;
+  return (picks.find((a) => /universal/.test(a.path)) ?? picks[0])?.path;
+}
+
+/** Projects with a build going, so a second click doesn't start another Gradle run on the same folder. */
+const building = new Set<string>();
+
+/**
+ * Builds the project with `gradlew assembleDebug`, installs the APK on the target and launches it, as NDJSON
+ * `AndroidRunEvent`s with Gradle's output as it comes. Cancelling the stream stops the build.
+ */
+export function buildAndRunStream(dir: string, target: Target): ReadableStream<Uint8Array> {
+  const wrapper = gradleDir(dir);
+  if (wrapper === undefined) throw new EmulatorError(404, "No Gradle wrapper (gradlew) in the project or its android/ folder");
+  const adb = adbOr409();
+  const serial = serialFor(target);
+  const cwd = path.join(dir, wrapper);
+  if (building.has(cwd)) throw new EmulatorError(409, "A build is already running for this project");
+  building.add(cwd);
+
+  const enc = new TextEncoder();
+  let child: ChildProcess | undefined;
+  let cancelled = false;
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (ev: AndroidRunEvent) => {
+        try {
+          controller.enqueue(enc.encode(JSON.stringify(ev) + "\n"));
+        } catch {
+          // Client went away; cancel() cleans up.
+        }
+      };
+      const say = (text: string) => send({ text, stream: "system" });
+      try {
+        const started = Date.now();
+        const env = { ...process.env };
+        // Builds like Android Studio's: its JDK, and the SDK even without a local.properties (fresh worktrees).
+        const jdk = studioJdk();
+        if (jdk) env.JAVA_HOME = jdk;
+        const sdk = sdkRoot() ?? sdkCandidates().find((c) => fs.existsSync(c));
+        if (sdk && !env.ANDROID_HOME && !env.ANDROID_SDK_ROOT) env.ANDROID_HOME = sdk;
+        const windows = process.platform === "win32";
+        const args = ["assembleDebug", "--console=plain"];
+        say(`> ${path.posix.join(wrapper, "gradlew")} ${args.join(" ")}${jdk ? ` (JDK: ${jdk})` : ""}`);
+        const code = await new Promise<number>((resolve, reject) => {
+          // gradlew.bat has to go through cmd, by full path: cmd skips the current folder when NoDefaultCurrentDirectoryInExePath
+          // is set. `sh gradlew` doesn't need the script to be executable.
+          child = windows
+            ? spawn(`"${path.join(cwd, "gradlew.bat")}" ${args.join(" ")}`, { cwd, env, shell: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+            : spawn("sh", ["gradlew", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+          for (const stream of ["stdout", "stderr"] as const) {
+            const decoder = new StringDecoder("utf8");
+            let rest = "";
+            // Without the colour codes some plugins (Expo's) print.
+            const emit = (parts: string[]) => parts.forEach((text) => send({ text: text.replace(/\x1b\[[\d;]*m/g, ""), stream }));
+            child[stream]!.on("data", (chunk: Buffer) => {
+              const parts = (rest + decoder.write(chunk)).split(/\r?\n/);
+              rest = parts.pop() ?? "";
+              emit(parts);
+            });
+            child[stream]!.on("end", () => rest && emit([rest + decoder.end()]));
+          }
+          child.once("error", reject);
+          child.once("close", (code) => resolve(code ?? 1));
+        });
+        if (cancelled) return;
+        if (code !== 0) throw new Error(`Gradle failed (exit code ${code})`);
+
+        const apk = debugApk(dir, started);
+        if (!apk) throw new Error("The build finished, but no debug APK turned up under build/outputs/apk");
+        const file = path.join(dir, apk);
+        const pkg = await packageOf(file);
+        if (!pkg) throw new Error(`Couldn't tell which package ${apk} installs`);
+
+        say(`> adb -s ${serial} install -r -t ${apk}`);
+        say(await adbInstall(adb, serial, file));
+        if (cancelled) return;
+
+        say(`> adb -s ${serial} shell monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`);
+        const launch = await run(adb, ["-s", serial, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"]);
+        const out = (launch.stdout + launch.stderr).trim();
+        if (launch.code !== 0 || !/Events injected: 1/.test(out)) {
+          throw new Error(/No activities found/.test(out) ? `${pkg} has no launcher activity to start` : out || "Launching the app failed");
+        }
+        send({ done: true, apk, package: pkg });
+      } catch (e) {
+        if (!cancelled) send({ error: (e as Error).message });
+      } finally {
+        building.delete(cwd);
+        try {
+          controller.close();
+        } catch {
+          // Already closed.
+        }
+      }
+    },
+    cancel() {
+      cancelled = true;
+      if (child?.pid && child.exitCode === null) kill(child.pid);
+    },
+  });
 }

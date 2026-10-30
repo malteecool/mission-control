@@ -7,6 +7,7 @@ import {
   Circle,
   Download,
   Eraser,
+  Hammer,
   Play,
   Power,
   RotateCw,
@@ -16,8 +17,9 @@ import {
   Unplug,
   Usb,
   Wifi,
+  X,
 } from "lucide-react";
-import { api, type DeviceInfo, type EmulatorInfo } from "../lib/api.ts";
+import { api, type AndroidRunEvent, type DeviceInfo, type EmulatorInfo } from "../lib/api.ts";
 import { timeAgo } from "../lib/util.ts";
 import { h264Player } from "../lib/h264.ts";
 import { Button, Empty, ErrorNote, IconButton } from "./ui.tsx";
@@ -347,6 +349,68 @@ function Logcat({ url }: { url: string }) {
   );
 }
 
+type BuildLine = { seq: number; text: string; stream: "stdout" | "stderr" | "system" };
+type Build = { lines: BuildLine[]; state: "running" | "done" | "failed" | "stopped"; message?: string };
+
+/** Gradle's output for a build & run, then adb's, followed while it comes. */
+function BuildLog({ build, onClose }: { build: Build; onClose: () => void }) {
+  const logRef = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+
+  useLayoutEffect(() => {
+    const el = logRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [build.lines]);
+
+  const pill = {
+    running: { label: "building…", className: "bg-amber-400/15 text-amber-200 animate-pulse" },
+    done: { label: "launched", className: "bg-emerald-400/15 text-emerald-300" },
+    failed: { label: "failed", className: "bg-rose-500/15 text-rose-300" },
+    stopped: { label: "stopped", className: "bg-white/10 text-slate-400" },
+  }[build.state];
+  return (
+    <div className="flex h-[45%] min-h-32 shrink-0 flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-slate-400">Build</span>
+        <span className={clsx("rounded-full px-2 py-0.5 font-mono text-[10px]", pill.className)}>{pill.label}</span>
+        {build.message && <span className="min-w-0 truncate text-xs text-slate-400">{build.message}</span>}
+        {build.state !== "running" && (
+          <IconButton onClick={onClose} title="Close the build output" className="ml-auto">
+            <X size={14} />
+          </IconButton>
+        )}
+      </div>
+      <div
+        ref={logRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+        className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-3 font-mono text-[11px] leading-relaxed"
+      >
+        {build.lines.map((l) => (
+          <div
+            key={l.seq}
+            className={clsx(
+              "whitespace-pre-wrap break-all",
+              l.stream === "system"
+                ? "text-sky-300"
+                : /^e: |error:|^FAILURE|FAILED|^\* What went wrong/.test(l.text)
+                  ? "text-rose-300"
+                  : /^w: |warning:/i.test(l.text)
+                    ? "text-amber-200"
+                    : "text-slate-300",
+            )}
+          >
+            {l.text}
+          </div>
+        ))}
+        {!build.lines.length && <div className="text-slate-600">Starting Gradle…</div>}
+      </div>
+    </div>
+  );
+}
+
 /** `adb connect`, or `adb pair` when a pairing code is given (Android 11+'s Wireless debugging). */
 function ConnectForm({ onConnected }: { onConnected: (output: string) => void }) {
   const qc = useQueryClient();
@@ -444,6 +508,10 @@ export function EmulatorPanel({ projectId }: { projectId: number }) {
   const [apk, setApk] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [wifiOpen, setWifiOpen] = useState(false);
+  const [build, setBuild] = useState<Build>();
+  const buildCtrl = useRef<AbortController | null>(null);
+  // Leaving the tab stops a build that's going.
+  useEffect(() => () => buildCtrl.current?.abort(), []);
 
   const avds = overview.data?.avds ?? [];
   const physical = devices.data?.devices ?? [];
@@ -489,6 +557,39 @@ export function EmulatorPanel({ projectId }: { projectId: number }) {
     const t = setTimeout(() => setNotice(undefined), 5000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  const buildAndRun = async (target: { avd: string } | { serial: string }) => {
+    const ctrl = new AbortController();
+    buildCtrl.current = ctrl;
+    let seq = 0;
+    let pending: BuildLine[] = [];
+    let result: Pick<Build, "state" | "message"> | undefined;
+    setBuild({ lines: [], state: "running" });
+    // Gradle can print hundreds of lines a second; render them a frame at a time.
+    const flush = () => {
+      if (!pending.length) return;
+      const batch = pending;
+      pending = [];
+      setBuild((b) => b && { ...b, lines: [...b.lines, ...batch].slice(-MAX_LINES) });
+    };
+    const timer = setInterval(flush, 100);
+    try {
+      await api.buildAndRun(projectId, target, ctrl.signal, (ev: AndroidRunEvent) => {
+        if ("text" in ev) pending.push({ seq: seq++, text: ev.text, stream: ev.stream });
+        else if ("done" in ev) result = { state: "done", message: `Launched ${ev.package}` };
+        else result = { state: "failed", message: ev.error };
+      });
+      result ??= { state: "failed", message: "The build stopped without finishing" };
+    } catch (e) {
+      result = ctrl.signal.aborted ? { state: "stopped", message: "Stopped" } : { state: "failed", message: (e as Error).message };
+    } finally {
+      clearInterval(timer);
+      flush();
+      if (buildCtrl.current === ctrl) buildCtrl.current = null;
+      setBuild((b) => b && { ...b, ...result });
+      qc.invalidateQueries({ queryKey: ["android", projectId] });
+    }
+  };
 
   const pick = (key: string) => {
     setPicked(key);
@@ -583,6 +684,21 @@ export function EmulatorPanel({ projectId }: { projectId: number }) {
           <Button onClick={() => setWifiOpen((o) => !o)} title="Connect a device over Wi-Fi (adb connect / adb pair)">
             <Wifi size={12} /> Wi-Fi…
           </Button>
+          {project.data?.gradlew &&
+            (build?.state === "running" ? (
+              <Button variant="danger" onClick={() => buildCtrl.current?.abort()} title="Stop the Gradle build">
+                <Square size={12} /> Stop build
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                disabled={!canInstall || !installTarget}
+                onClick={() => installTarget && buildAndRun(installTarget)}
+                title={`${project.data.gradlew} assembleDebug, then install the APK and launch the app`}
+              >
+                <Hammer size={12} /> Build & run
+              </Button>
+            ))}
           {apks.length > 0 && (
             <>
               <select
@@ -676,13 +792,16 @@ export function EmulatorPanel({ projectId }: { projectId: number }) {
             </div>
           )}
         </div>
-        {source ? (
-          <Logcat key={sourceBase(source)} url={`${sourceBase(source)}/logcat`} />
-        ) : (
-          <div className="glass flex min-h-0 flex-1 items-center justify-center rounded-2xl text-sm text-slate-600">
-            Logcat shows here while the device is on.
-          </div>
-        )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+          {build && <BuildLog build={build} onClose={() => setBuild(undefined)} />}
+          {source ? (
+            <Logcat key={sourceBase(source)} url={`${sourceBase(source)}/logcat`} />
+          ) : (
+            <div className="glass flex min-h-0 flex-1 items-center justify-center rounded-2xl text-sm text-slate-600">
+              Logcat shows here while the device is on.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

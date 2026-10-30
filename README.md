@@ -126,7 +126,12 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   -grpc-use-token`), and the tab shows its screen. Click to tap, drag to swipe, scroll to scroll, and type while it's
   focused; the buttons below it are Back, Home, Recents, Rotate, Power and Screenshot. Logcat (via `adb logcat`) runs
   alongside, with a filter. **Install APK** runs `adb install -r` with an APK from the project's
-  `<module>/build/outputs/apk` folders. Emulators keep running when the dashboard restarts and are found again from
+  `<module>/build/outputs/apk` folders. **Build & run** (on projects with a Gradle wrapper at the root or in
+  `android/`) runs `gradlew assembleDebug`, streams its output into a Build pane above Logcat, installs the debug APK
+  it made and launches the app (`adb shell monkey -p <package> -c android.intent.category.LAUNCHER 1`, the package
+  read from the `output-metadata.json` Gradle writes beside the APK). It builds with Android Studio's bundled JDK
+  when Studio is installed, as Studio does, and passes the SDK as `ANDROID_HOME`, so a worktree without a
+  `local.properties` builds too. **Stop build**, or leaving the tab, stops Gradle. Emulators keep running when the dashboard restarts and are found again from
   the files they advertise themselves in. Ones started by Android Studio show up too: they only take signed JWTs
   (`-grpc-use-jwt`), so the dashboard drops its own public key in the folder the emulator loads keys from and signs
   its calls the way Studio does. One whose gRPC API can't be reached is mirrored through scrcpy instead (below).
@@ -136,7 +141,7 @@ To redraw the icon, edit `desktop/scripts/make-icon.mjs` and run `npm run icons 
   **Physical devices** that adb sees (USB with USB debugging on, or Wi-Fi) are listed under the AVDs and mirrored with
   [scrcpy](https://github.com/Genymobile/scrcpy)'s server: the dashboard pushes `scrcpy-server` to the device, runs it
   over an `adb forward` tunnel and the page decodes its H.264 stream with WebCodecs. Tapping, swiping, scrolling,
-  typing, the buttons, Logcat and **Install APK** work as for the emulator. The server jar is pinned to scrcpy 5.0.1
+  typing, the buttons, Logcat, **Install APK** and **Build & run** work as for the emulator. The server jar is pinned to scrcpy 5.0.1
   (client and server must match exactly), downloaded once from scrcpy's GitHub release into `server/data/scrcpy` and
   checked against its SHA-256; scrcpy itself needn't be installed. **Wi-Fi…** connects a device with `adb connect
   host:port`, or pairs one first with `adb pair` when you enter the code from Android 11+'s Wireless debugging screen.
