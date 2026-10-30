@@ -908,7 +908,7 @@ app.get("/api/health", async (c) => {
 // ── MCP (tools for the Claude sessions the dashboard starts, see mcp.ts) ──────
 
 app.post("/api/mcp", async (c) => {
-  const res = await mcpPost(await c.req.json());
+  const res = await mcpPost(await c.req.json(), c.req.query("cwd"));
   return res === undefined ? c.body(null, 202) : c.json(res);
 });
 

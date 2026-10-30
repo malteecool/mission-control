@@ -166,8 +166,8 @@ export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: Chat
   ];
   if (opts.sessionId) args.push("--resume", opts.sessionId);
   if (opts.model) args.push("--model", opts.model);
-  // The dashboard's own tools (an Android screen to look at and tap); a read-only session doesn't get to tap.
-  if (!opts.readOnly) args.push(...mcpLaunchArgs());
+  // The dashboard's own tools (an Android screen to look at and tap, and a build of the app in cwd); a read-only session doesn't get to tap.
+  if (!opts.readOnly) args.push(...mcpLaunchArgs(opts.cwd));
 
   // Don't let the child think it is nested inside another Claude Code session.
   const env = { ...process.env };

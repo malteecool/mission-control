@@ -59,7 +59,7 @@ export async function listTargets(): Promise<{ targets: Target[]; avds: string[]
 }
 
 /** The device by AVD name or adb serial, or the only one there is. */
-async function resolve(device: string | undefined): Promise<Target> {
+export async function resolve(device: string | undefined): Promise<Target> {
   const { targets, avds } = await listTargets();
   if (device) {
     const t = targets.find((t) => t.serial === device || t.avd === device);
