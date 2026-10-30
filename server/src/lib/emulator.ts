@@ -294,10 +294,11 @@ async function registerKey(jwks: { dir: string; active: string }) {
     }
   };
   const ours = `dashboard-${kid}.jwk`;
-  // Earlier dashboards made a new key ID per run; clear out their leftovers.
+  // Earlier dashboards made a new random UUID key ID per run; clear out their leftovers. Only that format: other
+  // dashboard instances (other checkouts or worktrees) have their own 32-hex key IDs in here and still need them.
   try {
     for (const f of fs.readdirSync(jwks.dir))
-      if (f !== ours && /^dashboard-.+\.jwk$/.test(f)) fs.rmSync(path.join(jwks.dir, f), { force: true });
+      if (/^dashboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jwk$/i.test(f)) fs.rmSync(path.join(jwks.dir, f), { force: true });
   } catch {
     // Not there yet, or a file in use: harmless.
   }
@@ -885,6 +886,48 @@ function studioJdk(): string | undefined {
   return candidates.find((c) => fs.existsSync(path.join(c, "bin", exe("java"))));
 }
 
+/**
+ * On Windows, where CMake puts a deep project's native builds: a short folder instead of each module's `.cxx`. CMake's
+ * object paths there come close to 260 characters even in a shallow checkout (it hashes them to stay under 250), so the
+ * extra depth of a task worktree pushes them over, and the SDK's ninja can't open longer paths (LongPathsEnabled or
+ * not), failing with "manifest 'build.ninja' still dirty after 100 tries". Undefined for shallow projects, which keep
+ * the `.cxx` folders Android Studio builds in.
+ */
+function nativeBuildDir(gradleRoot: string): string | undefined {
+  if (process.platform !== "win32" || gradleRoot.length <= 60) return undefined;
+  const hash = crypto.createHash("sha1").update(path.resolve(gradleRoot).toLowerCase()).digest("hex").slice(0, 8);
+  return path.join(os.homedir(), ".cxx", hash);
+}
+
+/** Deletes the short native build folder a project's builds used, if any (say when its worktree goes). */
+export async function removeNativeBuilds(dir: string) {
+  const wrapper = gradleDir(dir);
+  const out = wrapper === undefined ? undefined : nativeBuildDir(path.join(dir, wrapper));
+  if (out) await fs.promises.rm(out, { recursive: true, force: true, maxRetries: 3 }).catch((err) => console.error("Removing native builds:", err));
+}
+
+/** A Gradle init script that points every Android module's CMake build at its own folder under `out`. */
+function nativeBuildInitScript(out: string): string {
+  const file = path.join(out, "init.gradle");
+  const root = out.split(path.sep).join("/").replace(/[\\']/g, "\\$&");
+  const script = `// Written by the project dashboard: CMake builds under a short path, for Windows' 260-character limit.
+def root = new File('${root}')
+allprojects { p ->
+  ['com.android.application', 'com.android.library'].each { id ->
+    p.plugins.withId(id) {
+      p.android.externalNativeBuild.cmake.buildStagingDirectory = new File(root, p.path == ':' ? 'root' : p.path.substring(1).replace(':', '_'))
+    }
+  }
+}
+`;
+  fs.mkdirSync(out, { recursive: true });
+  if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== script) fs.writeFileSync(file, script);
+  return file;
+}
+
+/** Gradle output that means a path went past Windows' 260-character limit. */
+const PATH_TOO_LONG = /still dirty after \d+ tries|Filename too long|path too long|maximum full path to an object file/i;
+
 /** The package an APK installs: from the output-metadata.json Gradle writes beside it, else from aapt2. */
 async function packageOf(apkFile: string): Promise<string | undefined> {
   try {
@@ -955,6 +998,12 @@ export function buildAndRunStream(dir: string, target: Target): ReadableStream<U
         const windows = process.platform === "win32";
         const args = ["assembleDebug", "--console=plain"];
         say(`> ${path.posix.join(wrapper, "gradlew")} ${args.join(" ")}${jdk ? ` (JDK: ${jdk})` : ""}`);
+        const native = nativeBuildDir(cwd);
+        if (native) {
+          args.push("--init-script", `"${nativeBuildInitScript(native)}"`);
+          say(`Native (CMake) builds go to ${native}, as the project's path is too deep for them on Windows`);
+        }
+        let tooLong = false;
         const code = await new Promise<number>((resolve, reject) => {
           // gradlew.bat has to go through cmd, by full path: cmd skips the current folder when NoDefaultCurrentDirectoryInExePath
           // is set. `sh gradlew` doesn't need the script to be executable.
@@ -965,7 +1014,11 @@ export function buildAndRunStream(dir: string, target: Target): ReadableStream<U
             const decoder = new StringDecoder("utf8");
             let rest = "";
             // Without the colour codes some plugins (Expo's) print.
-            const emit = (parts: string[]) => parts.forEach((text) => send({ text: text.replace(/\x1b\[[\d;]*m/g, ""), stream }));
+            const emit = (parts: string[]) =>
+              parts.forEach((text) => {
+                if (PATH_TOO_LONG.test(text)) tooLong = true;
+                send({ text: text.replace(/\x1b\[[\d;]*m/g, ""), stream });
+              });
             child[stream]!.on("data", (chunk: Buffer) => {
               const parts = (rest + decoder.write(chunk)).split(/\r?\n/);
               rest = parts.pop() ?? "";
@@ -977,6 +1030,13 @@ export function buildAndRunStream(dir: string, target: Target): ReadableStream<U
           child.once("close", (code) => resolve(code ?? 1));
         });
         if (cancelled) return;
+        if (code !== 0 && tooLong) {
+          throw new Error(
+            `Gradle failed (exit code ${code}): a path went past Windows' 260-character limit (${cwd} is ${cwd.length} characters deep). ` +
+              `The Android SDK's CMake and ninja can't use longer paths even with LongPathsEnabled, so build from a shallower ` +
+              `checkout (say a clone at C:\\src\\<name>).`,
+          );
+        }
         if (code !== 0) throw new Error(`Gradle failed (exit code ${code})`);
 
         const apk = debugApk(dir, started);
