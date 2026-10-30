@@ -861,15 +861,46 @@
     {
       "id": "e9cb4e6a-e5ab-4054-bfdf-4251db27a23f",
       "title": "Build, install and launch from the Android tab",
-      "status": "doing",
+      "status": "done",
       "kind": "feature",
       "priority": 2,
       "createdAt": "2026-10-29T18:30:08.315Z",
-      "updatedAt": "2026-10-29T23:00:57.000Z",
+      "updatedAt": "2026-10-30T20:18:00.311Z",
       "notes": "One button that runs the project's Gradle assembleDebug (./gradlew or android/gradlew), installs the APK on the running emulator and launches its main activity (adb shell monkey -p <package> 1, or am start). Stream the Gradle output into the panel. Today the tab only installs an APK that was already built. Code: installApk / androidProject in server/src/lib/emulator.ts, EmulatorPanel.tsx.",
       "origin": {
         "taskId": "a1922032-34f8-4de4-9189-69c270e8a8bf",
         "title": "Embedded android emulator"
+      },
+      "sessionId": "13d299e7-6be3-4977-9577-6aca7f293871",
+      "doneAt": "2026-10-30T19:56:29.971Z",
+      "reviewer": {
+        "runId": "d1ff9c7c-278b-48ce-95d0-16634a154f0f",
+        "sessionId": "7c6a3054-01c6-423f-bad5-7657d26dd9a5",
+        "startedAt": "2026-10-30T19:56:30.753Z",
+        "finishedAt": "2026-10-30T19:57:49.956Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "Build & run is solid: Gradle is spawned and stopped correctly on both platforms, the build lock is released on every exit path, choosing the debug APK and reading its package are reasonable, and the client batches output and stops the build when the tab closes. Only small edge cases remain.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "The Install APK button stays enabled while a build is running, so you can install the old APK in the middle of the build-and-install. Disable it while build?.state === 'running'.",
+            "file": "web/src/components/EmulatorPanel.tsx:717"
+          },
+          {
+            "severity": "low",
+            "text": "cancel() only kills Gradle. If Stop build is pressed during the install or launch step, adbInstall (up to 180 s) and the launch keep running in the background, and the build lock stays held until they finish.",
+            "file": "server/src/lib/emulator.ts:948"
+          },
+          {
+            "severity": "low",
+            "text": "The Gradle build has no timeout. If Gradle hangs and the client stays connected, the build lock is never released and the project can't be built again until the tab is closed.",
+            "file": "server/src/lib/emulator.ts:896"
+          }
+        ],
+        "followUps": [
+          "83d738c0-1a03-4e95-ae64-c14717cc7a13"
+        ]
       }
     },
     {
@@ -1005,24 +1036,52 @@
     {
       "id": "8f5f79bf-c924-4617-8bae-9d2387390bc6",
       "title": "Standing in the android tab and changing project navigates to the android folder of the new project - even if its not a android project",
-      "status": "todo",
+      "status": "doing",
       "kind": "bug",
       "priority": 2,
       "createdAt": "2026-10-29T18:48:08.932Z",
-      "updatedAt": "2026-10-29T18:48:08.932Z"
+      "updatedAt": "2026-10-30T23:01:04.795Z"
     },
     {
       "id": "9907a5ff-e64e-4b9a-aeda-5f6bc128489a",
       "title": "Quote the MCP config path and time out emulator input streams",
       "notes": "In claudeRunner.ts, quote the --mcp-config path from mcpLaunchArgs() (mcp.ts) when claudeCommand() returns shell: true, so a repo path with spaces doesn't break every session launch. In emulator.ts inputEvents, give the streamInputEvent call a deadline (or a timer that cancels the stream and rejects), so a hung emulator can't stall android_tap/swipe/key/type.",
-      "status": "todo",
+      "status": "done",
       "kind": "bug",
       "priority": 2,
       "createdAt": "2026-10-29T19:21:01.639Z",
-      "updatedAt": "2026-10-29T19:21:01.639Z",
+      "updatedAt": "2026-10-30T20:40:37.049Z",
       "origin": {
         "taskId": "7cd36a02-8de7-4a67-a8b1-7071cc858c7b",
         "title": "Let Claude sessions see and tap the emulator"
+      },
+      "review": {
+        "base": "827ef66f86768c43dc769c2483dc39c12bda4701",
+        "head": "d11f64a7ca6bc63648ad1a45615d13f149d49cc6",
+        "startedAt": "2026-10-30T20:39:14.569Z",
+        "end": "04ab80a9aab8cff42d8cd1e5467223f43d2afba4",
+        "endHead": "d11f64a7ca6bc63648ad1a45615d13f149d49cc6"
+      },
+      "sessionId": "4e75001e-6277-4047-9fa4-0415a6ff2c55",
+      "doneAt": "2026-10-30T20:40:02.693Z",
+      "reviewer": {
+        "runId": "9836f0e7-5c8c-43c5-8f7f-25b4c3058afe",
+        "sessionId": "e5cc32d5-da3b-4e41-9426-ab489b034d46",
+        "startedAt": "2026-10-30T20:40:03.445Z",
+        "finishedAt": "2026-10-30T20:40:37.038Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "The --mcp-config path is now quoted when Claude is launched through the shell, and emulator input streams get a gRPC deadline with a guard that stops writes once the call ends. Both changes do what the task asked; the only gap is that the program path itself is still unquoted on the same shell path.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "With shell: true the program path is passed to spawn unquoted, but a .cmd path set in settings (line 27) can contain spaces, e.g. a user folder like 'C:\\Users\\First Last\\...\\claude.cmd'. claudeInfo() quotes it (line 52), so the settings page shows a working version while every session launch fails. Same bug class as the --mcp-config fix.",
+            "file": "server/src/lib/claudeRunner.ts:184"
+          }
+        ],
+        "followUps": [
+          "7b1717b5-e08b-494d-90bc-91b125ffcbb7"
+        ]
       }
     },
     {
@@ -1077,28 +1136,74 @@
       "id": "e491c2e3-d2dc-4add-96db-91207025c46a",
       "title": "Stop a Studio emulator that rejects the dashboard's key from stalling the Android tab",
       "notes": "In server/src/lib/emulator.ts, registerKey waits up to 5 s and its failure deletes the connection, so every emulatorOverview poll starts the wait again and the list takes 5 s or more each time. Remember a failed key load per pid (e.g. a Map<pid, message>, cleared by pruneClients) so infoFor answers with the mirrored message right away, or bound statusOf's whole wait, key load included, to the 2 s limit. While there, delete the dashboard-<kid>.jwk files on server shutdown, or reuse a single key ID across restarts so they stop piling up.",
-      "status": "todo",
+      "status": "done",
       "kind": "bug",
       "priority": 2,
       "createdAt": "2026-10-29T19:36:21.754Z",
-      "updatedAt": "2026-10-29T19:36:21.754Z",
+      "updatedAt": "2026-10-30T21:11:42.928Z",
       "origin": {
         "taskId": "1b807fee-e464-402a-aadf-0811b70d1966",
         "title": "Show Android Studio's emulators in the Android tab"
+      },
+      "review": {
+        "base": "04ab80a9aab8cff42d8cd1e5467223f43d2afba4",
+        "head": "d11f64a7ca6bc63648ad1a45615d13f149d49cc6",
+        "startedAt": "2026-10-30T20:40:02.675Z",
+        "end": "5f98a0a6ed06f7390b32c28dfb32d8ef99aab67f",
+        "endHead": "d11f64a7ca6bc63648ad1a45615d13f149d49cc6"
+      },
+      "sessionId": "8fe579cd-e83a-4d72-8b9e-bd69a4f519d3",
+      "doneAt": "2026-10-30T20:41:03.879Z",
+      "reviewer": {
+        "runId": "3befeae4-7d8f-4598-9889-393d7713ff1d",
+        "sessionId": "a788cc84-68e1-4d9e-ac2c-6741a4f48539",
+        "startedAt": "2026-10-30T20:41:04.315Z",
+        "finishedAt": "2026-10-30T20:41:48.927Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "Saving key failures by pid removes the 5 s stall on every poll, and the saved signing key stops JWK files piling up. But the new cleanup deletes every other dashboard-*.jwk, which includes the keys of other dashboard instances (e.g. one running from a worktree) using the same Studio emulator.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "The cleanup removes every dashboard-*.jwk except our own, not just the old per-run UUID files. Each checkout's server/data now has its own stable key, so a second dashboard (a task worktree, or a Claude session testing the server) deletes the main dashboard's key and the reverse. The emulator most likely stops accepting the deleted key, and the victim's cached connection (ready already resolved) keeps failing authorization without writing the file again. The two instances keep breaking each other.",
+            "file": "server/src/lib/emulator.ts:300"
+          },
+          {
+            "severity": "low",
+            "text": "A saved key failure is never retried while the emulator keeps running, so an emulator that picks up the key late stays mirrored through scrcpy until it restarts. The task asked for this behavior; noted only so it's a known limit.",
+            "file": "server/src/lib/emulator.ts:240"
+          }
+        ],
+        "followUps": [
+          "6185b3b1-d5e5-48c0-9e9f-a4005f06a73f"
+        ]
       }
     },
     {
       "id": "4ed6028c-2abc-4459-a534-4fd3416f4a39",
       "title": "Cap the screenshots a live run keeps and replays",
       "notes": "In server/src/lib/runs.ts `emit`, once a run holds more than about 40 images (the same limit as MAX_TRANSCRIPT_IMAGES in claudeSessions.ts), remove `images` from the oldest stored `tool_result` events, so each later attach replays only the newest ones. Do the same in web/src/lib/chatStore.ts's `tool_result` handler, so a long live session doesn't build up unlimited data: URLs in the browser. Older thumbnails then just disappear, the same as for transcripts loaded from disk.",
-      "status": "todo",
+      "status": "done",
       "kind": "bug",
       "priority": 2,
       "createdAt": "2026-10-29T19:47:37.152Z",
-      "updatedAt": "2026-10-29T19:47:37.152Z",
+      "updatedAt": "2026-10-30T21:11:35.784Z",
       "origin": {
         "taskId": "8bded4c4-756c-461c-beb1-59ffae7abba7",
         "title": "Show Claude's Android screenshots in the session view"
+      },
+      "sessionId": "e283746e-1789-470e-be13-5e07e5edb280",
+      "doneAt": "2026-10-30T20:41:40.586Z",
+      "reviewer": {
+        "runId": "80b02f17-0bc3-4cd4-87f6-d0f82e0af2ee",
+        "sessionId": "6db1333b-6983-4868-9632-2599076c62a8",
+        "startedAt": "2026-10-30T20:41:41.034Z",
+        "finishedAt": "2026-10-30T20:42:10.141Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "Both the run event buffer and the browser chat store now keep only the newest ~40 screenshots, stripping images from older tool results the same way transcripts loaded from disk are capped. The bookkeeping is correct and the client-side copy keeps the store immutable.",
+        "findings": [],
+        "followUps": []
       }
     },
     {
@@ -1113,28 +1218,358 @@
     {
       "id": "cf3ce688-06e4-44bb-a5f3-cb26820d5b94",
       "title": "Tasks with merged branches still asks for review",
-      "status": "todo",
+      "status": "done",
       "kind": "bug",
       "priority": 2,
       "createdAt": "2026-10-29T20:55:32.421Z",
-      "updatedAt": "2026-10-29T20:55:32.421Z"
+      "updatedAt": "2026-10-30T20:18:05.617Z",
+      "sessionId": "f5b5c130-0103-4103-88d9-fade097791cb",
+      "doneAt": "2026-10-30T19:56:55.677Z",
+      "reviewer": {
+        "runId": "636e5808-6e93-42d7-a5aa-6d597562caa3",
+        "sessionId": "22442895-d44b-4b40-bd05-7744e7cb0828",
+        "startedAt": "2026-10-30T19:56:56.204Z",
+        "finishedAt": "2026-10-30T19:58:39.585Z",
+        "status": "done",
+        "verdict": "concerns",
+        "summary": "Worktree tasks whose branch was merged outside the dashboard now have their worktree, branch and review cleared instead of asking for review, and removeWorktree now cleans up leftover folders. But clearing skips importFollowUps, so tasks Claude added on the branch are lost, and a few edge cases can drop a review too early or make the board wait.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "settleLanded removes the worktree without calling importFollowUps first, unlike mergeTask and commitOnBranch. The dirty check leaves out the task file and commitWorktree never commits it, so tasks Claude added to the worktree's tasks.json are deleted with the folder when the branch was merged by hand.",
+            "file": "server/src/lib/review.ts:237"
+          },
+          {
+            "severity": "low",
+            "text": "'Landed' means 'tip is an ancestor of the main checkout's HEAD'. If you check out the task's branch (or a branch built on it) in the main checkout to try it, that's true, so the review and worktree are dropped, and the later `git branch -D` fails quietly because the branch is checked out.",
+            "file": "server/src/lib/review.ts:219"
+          },
+          {
+            "severity": "low",
+            "text": "changeSummaries and taskChanges now take the per-project merge lock for every worktree task, even when nothing has landed. While a push or PR is in progress (up to a 180s timeout), loading the board's change summaries or a review dialog waits for it. Running the cheap rev-parse/merge-base checks before taking the lock would avoid this.",
+            "file": "server/src/lib/review.ts:234"
+          }
+        ],
+        "followUps": [
+          "9dade5f2-ff76-4fe3-93f6-56d49924fe0f",
+          "d80aef41-c377-40fd-b667-533bdf1cc2d1"
+        ]
+      }
     },
     {
       "id": "d9990fc3-557a-4291-a423-8f811b32ae8f",
       "title": "Task maintenance.",
       "notes": "Check for finished tasks and commit them if no further review is needed. If the task is stuck in Review but the branch is merged you can go ahead and close it.\nif no tasks are in progress please move the item with the highest priority to the in progress lane.",
-      "status": "doing",
+      "status": "done",
       "kind": "chore",
       "priority": 2,
       "createdAt": "2026-10-29T23:00:30.014Z",
-      "updatedAt": "2026-10-29T23:00:32.702Z",
+      "updatedAt": "2026-10-29T23:01:36.265Z",
       "scheduleId": "b4fc63be-f089-4afe-93f7-7f4dd370e51a",
       "review": {
         "base": "e136effc8fff385259282a15a7eb74e09aca4b0e",
         "head": "b39fe5e82e6cb78e8dff295fbe14f3f3dc3a79f7",
-        "startedAt": "2026-10-29T23:00:30.326Z"
+        "startedAt": "2026-10-29T23:00:30.326Z",
+        "end": "9532a2174db4780ca2f439eab37876104d1d1162",
+        "endHead": "18d0b422f1d002b7c59f77d89670eb1f45a41e15"
       },
-      "sessionId": "6d7dd059-e05a-4a9a-ade9-0220dc54008c"
+      "sessionId": "6d7dd059-e05a-4a9a-ade9-0220dc54008c",
+      "doneAt": "2026-10-29T23:01:02.683Z",
+      "reviewer": {
+        "runId": "416556fe-5774-45a8-a153-00871b5640ea",
+        "sessionId": "7a3bcd26-da9f-438a-9b61-c317289746c4",
+        "startedAt": "2026-10-29T23:01:02.983Z",
+        "finishedAt": "2026-10-29T23:01:36.263Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "The maintenance commit closed the three finished, already-reviewed dev-server tasks and committed board state that had never been committed. No task is left in Review, and the oldest priority-2 task ('Build, install and launch from the Android tab') is now in progress, which follows the instructions since every open task has the same priority.",
+        "findings": [],
+        "followUps": []
+      }
+    },
+    {
+      "id": "83d738c0-1a03-4e95-ae64-c14717cc7a13",
+      "title": "Give Claude sessions a build_and_run tool for the emulator",
+      "notes": "Add a build_and_run tool to the dashboard's MCP server (server/src/lib/mcp.ts) that runs buildAndRunStream (server/src/lib/emulator.ts) for the session's project/worktree on the device shown in the Android tab. It should return the result plus the last ~100 lines of Gradle output, or the error. Update the tool instructions at mcp.ts:167-170, which still tell Claude to run installDebug itself. Then a session can change code, build, launch and screenshot without guessing the right JDK or SDK setup.",
+      "status": "done",
+      "kind": "feature",
+      "priority": 2,
+      "createdAt": "2026-10-30T19:57:49.958Z",
+      "updatedAt": "2026-10-30T20:38:47.423Z",
+      "origin": {
+        "taskId": "e9cb4e6a-e5ab-4054-bfdf-4251db27a23f",
+        "title": "Build, install and launch from the Android tab"
+      },
+      "sessionId": "43b90412-08c3-4e9c-a53a-2b5c44f5e9fa",
+      "doneAt": "2026-10-30T20:21:47.380Z",
+      "reviewer": {
+        "runId": "53b152b6-558b-4711-8151-50bb03869141",
+        "sessionId": "eadbfe4a-342e-4442-be45-b36648dae9bc",
+        "startedAt": "2026-10-30T20:21:48.004Z",
+        "finishedAt": "2026-10-30T20:22:30.823Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "android_build_and_run is wired up cleanly: the session's folder goes through the MCP URL, is checked against registered projects and their task worktrees, and the tool returns the result plus the last 100 Gradle lines; the tool instructions were updated. The main risk is that the reply only comes after the whole build, which can outlast a client-side HTTP timeout on slow first builds.",
+        "findings": [
+          {
+            "severity": "medium",
+            "text": "The tools/call reply is held until Gradle, install and launch all finish. Node's built-in fetch (undici) gives up after 5 minutes without response headers by default (not confirmed for Claude Code's MCP transport). A cold build in a fresh task worktree can take longer: the session then gets a transport error, the build carries on server-side with its result lost, and a retry hits 'A build is already running for this project'.",
+            "file": "server/src/lib/mcp.ts:89"
+          },
+          {
+            "severity": "low",
+            "text": "Nothing cancels the build stream if the MCP request is aborted (session interrupted or timed out), so Gradle keeps running and still installs and launches the app.",
+            "file": "server/src/lib/mcp.ts:95"
+          },
+          {
+            "severity": "low",
+            "text": "Configs moved from <dataDir>/mcp.json to <dataDir>/mcp/<hash>.json; the old file is left on disk unused.",
+            "file": "server/src/lib/mcp.ts:29"
+          }
+        ],
+        "followUps": [
+          "e8dc1322-dbd3-4ba3-a579-3a63fc1e7afb"
+        ]
+      }
+    },
+    {
+      "id": "9dade5f2-ff76-4fe3-93f6-56d49924fe0f",
+      "title": "Import worktree follow-ups before settling a hand-merged task",
+      "notes": "In settleLanded (server/src/lib/review.ts:~237), call `await importFollowUps(project, task.worktree).catch(() => {})` before removeWorktree, the same as mergeTask does. Otherwise tasks Claude added to the worktree's tasks.json are lost when the branch was merged outside the dashboard.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 1,
+      "createdAt": "2026-10-30T19:58:39.588Z",
+      "updatedAt": "2026-10-30T21:11:47.656Z",
+      "origin": {
+        "taskId": "cf3ce688-06e4-44bb-a5f3-cb26820d5b94",
+        "title": "Tasks with merged branches still asks for review"
+      },
+      "review": {
+        "base": "513aea703623b1bfa61f5780eda5dd4c724b6f03",
+        "head": "d11f64a7ca6bc63648ad1a45615d13f149d49cc6",
+        "startedAt": "2026-10-30T20:38:53.531Z",
+        "end": "827ef66f86768c43dc769c2483dc39c12bda4701",
+        "endHead": "d11f64a7ca6bc63648ad1a45615d13f149d49cc6"
+      },
+      "sessionId": "13958d21-4494-497a-8243-beb0e57550ab",
+      "doneAt": "2026-10-30T20:39:14.605Z",
+      "reviewer": {
+        "runId": "737d5aea-e6bb-4f2e-8ce3-7bad53bf6059",
+        "sessionId": "6804a96c-aff6-4d03-846a-1c953d7b661e",
+        "startedAt": "2026-10-30T20:39:15.055Z",
+        "finishedAt": "2026-10-30T20:39:37.320Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "A one-line fix that imports worktree follow-ups before settleLanded removes the worktree, the same way mergeTask does. It's idempotent, runs under the merge lock, and swallows errors so a failed import can't stop the cleanup.",
+        "findings": [],
+        "followUps": []
+      }
+    },
+    {
+      "id": "d80aef41-c377-40fd-b667-533bdf1cc2d1",
+      "title": "Don't treat a task branch as landed when the main checkout is on it",
+      "notes": "In landedElsewhere (server/src/lib/review.ts:211), return false when currentBranch(project.path) is the task's own branch, or is missing (detached HEAD). Otherwise checking the branch out to try it clears the task's review and worktree. Optionally also do the rev-parse/merge-base checks before taking the merge lock in settleLanded, so board loads don't wait behind a running push or PR.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-30T19:58:39.600Z",
+      "updatedAt": "2026-10-30T21:11:32.611Z",
+      "origin": {
+        "taskId": "cf3ce688-06e4-44bb-a5f3-cb26820d5b94",
+        "title": "Tasks with merged branches still asks for review"
+      },
+      "sessionId": "0b4b85aa-217a-4093-9a31-c3c36044c1b3",
+      "doneAt": "2026-10-30T20:42:02.615Z",
+      "reviewer": {
+        "runId": "4dc2f41a-9434-448c-a5e5-f8da4143f598",
+        "sessionId": "1bef73c5-f290-435f-ac31-e5552f3f8c8b",
+        "startedAt": "2026-10-30T20:42:03.122Z",
+        "finishedAt": "2026-10-30T20:42:38.382Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "landedElsewhere now refuses to settle a task when the main checkout is on the task's branch or detached, and settleLanded checks without the lock before rechecking under it, so board loads don't wait behind a running merge, push or PR. Both changes are correct and handle a merge running at the same time safely.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "mergeTask only refuses a detached HEAD, not a main checkout that's on the task's own branch (openPullRequest at line 543 refuses both). In that case the merge does nothing and removing the worktree then tries to delete the checked-out branch. Git normally won't check out a branch another worktree is using, so this only happens after the worktree folder is gone.",
+            "file": "server/src/lib/review.ts:427"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "e8dc1322-dbd3-4ba3-a579-3a63fc1e7afb",
+      "title": "Keep android_build_and_run alive through long Gradle builds",
+      "notes": "The tool in server/src/lib/mcp.ts only replies once the build in buildAndRunStream (server/src/lib/emulator.ts:888) has finished, so a cold build of more than about 5 minutes may hit the client's HTTP timeout and lose its result. For tools/call, answer with text/event-stream and send notifications/progress (when the request has a progressToken) or comments while Gradle runs, then the final result; or send the reply headers early. Also cancel the stream's reader when the request is aborted (c.req.raw.signal in index.ts /api/mcp), so an abandoned build doesn't keep running and installing. Test with a fresh worktree of an Android project.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-30T20:22:30.826Z",
+      "updatedAt": "2026-10-30T21:11:29.147Z",
+      "origin": {
+        "taskId": "83d738c0-1a03-4e95-ae64-c14717cc7a13",
+        "title": "Give Claude sessions a build_and_run tool for the emulator"
+      },
+      "sessionId": "ee73dc7d-46dc-4e41-b004-4fcc5e05bf2b",
+      "doneAt": "2026-10-30T20:59:32.323Z",
+      "reviewer": {
+        "runId": "a0c4e72e-2a07-4ff3-a321-cc2d6fb53950",
+        "sessionId": "0bb34352-b8d1-4efd-8f92-adfcb1c27521",
+        "startedAt": "2026-10-30T20:59:32.689Z",
+        "finishedAt": "2026-10-30T21:00:15.696Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "android_build_and_run's call now answers as an event stream: headers right away, a comment every 15s and progress messages while Gradle runs, then the result. A client that goes away now stops Gradle and skips the install. Hono's node server cancels the response stream on disconnect, which kills Gradle as intended.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "An abort that arrives while adb install is running doesn't stop the install. Only the launch afterwards is skipped. This is harmless but not a full stop.",
+            "file": "server/src/lib/emulator.ts:990"
+          },
+          {
+            "severity": "low",
+            "text": "Only a single tools/call message gets the streaming reply. A tools/call inside a JSON batch still waits silently for the result, so a long build there could still time out. Current MCP clients don't send batches, so this doesn't matter in practice.",
+            "file": "server/src/lib/mcp.ts:393"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "7b1717b5-e08b-494d-90bc-91b125ffcbb7",
+      "title": "Quote the claude command path when launching through the shell",
+      "notes": "In launchClaude (server/src/lib/claudeRunner.ts:184), pass `shell ? `\"${command}\"` : command` to spawn, the same way claudeInfo() does at line 52. Otherwise a configured claude.cmd under a folder with spaces (claudeCommand line 27) passes the settings-page version check but breaks every session launch.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-30T20:40:37.039Z",
+      "updatedAt": "2026-10-30T21:12:29.757Z",
+      "origin": {
+        "taskId": "9907a5ff-e64e-4b9a-aeda-5f6bc128489a",
+        "title": "Quote the MCP config path and time out emulator input streams"
+      },
+      "review": {
+        "base": "bc77db8703a047216dc4fcd539b30e56d2adaa5c",
+        "head": "e5716adb349fd3a38c3585009acbbc7e23efe399",
+        "startedAt": "2026-10-30T21:12:00.289Z",
+        "end": "3dd09e36b5f5826f06fe2c29df3af4126f138251",
+        "endHead": "e5716adb349fd3a38c3585009acbbc7e23efe399"
+      },
+      "sessionId": "c5bd34ad-c77a-4c6b-abd8-2354fe3c77e0",
+      "doneAt": "2026-10-30T21:12:14.245Z",
+      "reviewer": {
+        "runId": "e9e59faf-5942-4095-ada8-8eeb37616883",
+        "sessionId": "bc30b8c8-d812-406c-8bbd-7d4426488d66",
+        "startedAt": "2026-10-30T21:12:14.663Z",
+        "finishedAt": "2026-10-30T21:12:29.756Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "launchClaude now quotes the claude command when spawning through the shell, the same way claudeInfo() does, so a configured claude.cmd under a folder with spaces both passes the settings check and launches sessions. These are the only two places claude is launched, and both now handle it the same way.",
+        "findings": [],
+        "followUps": []
+      }
+    },
+    {
+      "id": "6185b3b1-d5e5-48c0-9e9f-a4005f06a73f",
+      "title": "Only clean up old per-run dashboard JWK files, not other instances' keys",
+      "notes": "In server/src/lib/emulator.ts registerKey, the leftover sweep matches /^dashboard-.+\\.jwk$/ and deletes keys that other dashboard instances (separate checkouts or worktrees, each with its own server/data key) still use. That makes them break each other on the same Android Studio emulator. Limit the sweep to the old random-UUID format (dashboard-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.jwk). The new key IDs are 32 hex characters, so they're never matched.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-30T20:41:48.928Z",
+      "updatedAt": "2026-10-30T22:59:16.485Z",
+      "origin": {
+        "taskId": "e491c2e3-d2dc-4add-96db-91207025c46a",
+        "title": "Stop a Studio emulator that rejects the dashboard's key from stalling the Android tab"
+      },
+      "sessionId": "65809323-af17-4319-84b9-2b62b89ae450",
+      "doneAt": "2026-10-30T21:27:29.896Z",
+      "reviewer": {
+        "runId": "e47544c2-45c9-4926-a192-421094a6c6b5",
+        "sessionId": "94e9000e-61ad-455a-b1a0-8d25c8bccaf3",
+        "startedAt": "2026-10-30T21:27:30.157Z",
+        "finishedAt": "2026-10-30T21:27:55.867Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "The leftover-key sweep now only removes old random-UUID key files, so other dashboard instances' 32-hex keys survive on a shared Studio emulator. Removing the `f !== ours` guard is safe because our key ID can never match the UUID pattern.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "Key files from instances that no longer exist (a deleted worktree or a wiped server/data) are never cleaned up, so dashboard-<32hex>.jwk files can pile up in the emulator's JWKS folder. They're small and harmless, and keeping them beats deleting keys that are in use.",
+            "file": "server/src/lib/emulator.ts:300"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "077fa635-cc34-469e-a399-98e1a3f519af",
+      "title": "Make android_build_and_run work in deep task worktrees on Windows (path length)",
+      "notes": "Building GymbroTS (React Native) from a fresh worktree at <project>/.claude/worktrees/<name> fails in native CMake: \"ninja: error: manifest 'build.ninja' still dirty after 100 tries\" in :expo-modules-core and :react-native-reanimated buildCMakeDebug. Removing that worktree also hit \"Filename too long\", so the deep path likely crosses Windows' 260-character limit. Options: check whether the main checkout builds; set the build dir somewhere shorter, or point the user at enabling long paths (LongPathsEnabled plus git core.longpaths); and recognize the error in buildAndRunStream so the tool gives a useful hint.",
+      "status": "done",
+      "kind": "bug",
+      "priority": 2,
+      "createdAt": "2026-10-30T20:58:58.351Z",
+      "updatedAt": "2026-10-30T21:27:42.531Z",
+      "origin": {
+        "taskId": "e8dc1322-dbd3-4ba3-a579-3a63fc1e7afb",
+        "title": "Keep android_build_and_run alive through long Gradle builds"
+      },
+      "review": {
+        "base": "3dd09e36b5f5826f06fe2c29df3af4126f138251",
+        "head": "e5716adb349fd3a38c3585009acbbc7e23efe399",
+        "startedAt": "2026-10-30T21:12:14.228Z",
+        "end": "dd6b857fb0661d210ea3f531bbb206b5a5f78ce6",
+        "endHead": "e5716adb349fd3a38c3585009acbbc7e23efe399"
+      },
+      "sessionId": "c6285c1a-58fc-49dc-a8c7-b84861a84dc1",
+      "doneAt": "2026-10-30T21:26:56.015Z",
+      "reviewer": {
+        "runId": "794798f3-56c7-4d3b-88bd-6c440ce7bacc",
+        "sessionId": "039179b4-df93-4980-8e6b-c106325d5366",
+        "startedAt": "2026-10-30T21:26:56.405Z",
+        "finishedAt": "2026-10-30T21:27:42.530Z",
+        "status": "done",
+        "verdict": "good",
+        "summary": "On Windows, deep projects' CMake builds now go to a short ~/.cxx/<hash> folder through a Gradle init script; path-limit failures get a clear error; and worktree removal deletes those builds and passes core.longpaths so git can delete deep files. The build and the cleanup work out the same folder and the init-script path is escaped properly, but a real GymbroTS build wasn't run in this review.",
+        "findings": [
+          {
+            "severity": "low",
+            "text": "~/.cxx/<hash> folders are only deleted by removeWorktree. A worktree deleted any other way (by hand, `git worktree prune`, a crash before cleanup) leaves its native build behind in the home folder for good, and for React Native that's often several GB. Nothing ever sweeps folders whose project no longer exists.",
+            "file": "server/src/lib/emulator.ts:897"
+          },
+          {
+            "severity": "low",
+            "text": "removeNativeBuilds runs before `git worktree remove`. If git then fails (say a locked file), the worktree survives without its native builds, so the next build starts CMake from scratch. It's only a rebuild, not data loss.",
+            "file": "server/src/lib/worktrees.ts:108"
+          },
+          {
+            "severity": "low",
+            "text": "When the CMake folder was already moved and the build still fails on a path-limit error, the message says only 'build from a shallower checkout'. It doesn't mention the move, so it's unclear whether CMake's output or something else (like the sources' own paths) is still too long.",
+            "file": "server/src/lib/emulator.ts:1032"
+          }
+        ],
+        "followUps": []
+      }
+    },
+    {
+      "id": "f958b8f3-bc6c-46bd-9e0e-8a38d5240f61",
+      "title": "Task maintenance.",
+      "notes": "Check for finished tasks and commit them if no further review is needed. If the task is stuck in Review but the branch is merged you can go ahead and close it.\nif no tasks are in progress please move the item with the highest priority to the in progress lane.",
+      "status": "doing",
+      "kind": "chore",
+      "priority": 2,
+      "createdAt": "2026-10-30T23:00:23.605Z",
+      "updatedAt": "2026-10-30T23:00:26.254Z",
+      "scheduleId": "b4fc63be-f089-4afe-93f7-7f4dd370e51a",
+      "review": {
+        "base": "e05d74b049f2669e389ec5ffdde810d0ec9f151d",
+        "head": "0ed8c562ec8a7a26a36c9e81895c449c997dc5dc",
+        "startedAt": "2026-10-30T23:00:24.040Z"
+      },
+      "sessionId": "3563e237-9a56-42c5-8a71-e086ba3a44fd"
     }
   ]
 }
