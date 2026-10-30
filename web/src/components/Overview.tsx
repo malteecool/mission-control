@@ -60,7 +60,8 @@ export function Overview({ projects, onAdd }: { projects: ProjectSummary[]; onAd
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+      {/* minmax(0, …) so long titles truncate instead of widening the row past the page. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Panel className="p-4">
           <div className="hud-label mb-3">Next up</div>
           {o?.nextUp.length === 0 && <div className="py-6 text-center text-sm text-slate-500">Nothing open. Suspicious.</div>}
