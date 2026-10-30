@@ -169,13 +169,19 @@ export function launchClaude(runId: string, opts: LaunchOptions, emit: (ev: Chat
   // The dashboard's own tools (an Android screen to look at and tap, and a build of the app in cwd); a read-only session doesn't get to tap.
   if (!opts.readOnly) args.push(...mcpLaunchArgs(opts.cwd));
 
+  const { command, shell } = claudeCommand();
+  // Through the shell the command and args are joined unquoted, so a path with spaces would split.
+  if (shell) {
+    const i = args.indexOf("--mcp-config");
+    if (i >= 0) args[i + 1] = `"${args[i + 1]}"`;
+  }
+
   // Don't let the child think it is nested inside another Claude Code session.
   const env = { ...process.env };
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
 
-  const { command, shell } = claudeCommand();
-  const child = spawn(command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
+  const child = spawn(shell ? `"${command}"` : command, args, { cwd: opts.cwd, env, shell, windowsHide: true });
   const proc: Proc = { child, stopped: false, pending: new Map(), permissionMode: opts.permissionMode, emit, onPlan: opts.onPlan, readOnly: opts.readOnly };
   procs.set(runId, proc);
 
