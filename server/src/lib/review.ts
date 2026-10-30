@@ -213,6 +213,9 @@ async function landedElsewhere(project: Project, task: Task): Promise<boolean> {
   if (!wt || activeRunForTask(task.id) || activeReviewerRun(task.id)) return false;
   const main = await repoFor(project.path);
   if (!main) return false;
+  // Checking the task's branch out (to try it) or detaching HEAD makes it trivially "merged" into HEAD.
+  const into = await currentBranch(main.root);
+  if (!into || into === wt.branch) return false;
   const tip = await git(main.root, ["rev-parse", "-q", "--verify", `refs/heads/${wt.branch}^{commit}`]);
   if (!tip.ok) return false;
   const commit = tip.stdout.trim();
@@ -230,10 +233,12 @@ async function landedElsewhere(project: Project, task: Task): Promise<boolean> {
 async function settleLanded(project: Project, tasks: Task[]): Promise<Set<string>> {
   const settled = new Set<string>();
   for (const t of tasks) {
-    if (!t.worktree) continue;
+    // Check first without the lock so board loads don't wait behind a running merge, push or PR; recheck under it.
+    if (!t.worktree || !(await landedElsewhere(project, t))) continue;
     await withLock(`merge:${project.id}`, async () => {
       const task = await getTask(project.path, t.id);
       if (!task?.worktree || !(await landedElsewhere(project, task))) return;
+      await importFollowUps(project, task.worktree).catch(() => {});
       await removeWorktree(project, task.worktree, { deleteBranch: true }).catch((err) => console.error("Removing worktree:", err));
       await updateTask(project.path, task.id, { worktree: undefined, review: undefined });
       settled.add(task.id);
